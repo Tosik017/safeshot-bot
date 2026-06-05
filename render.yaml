@@ -1,0 +1,23 @@
+# Render Blueprint. Деплой: New + > Blueprint > репозиторій із цим файлом.
+# УВАГА (Render Free): web-сервіс засинає без ВХІДНОГО HTTP-трафіку. Бот на
+# long-polling (вихідні запити) не утримує його сам → потрібен зовнішній
+# пінгер (UptimeRobot/cron-job.org) на /ping раз на ~10 хв. Деталі в README.
+services:
+  - type: web
+    name: safeshot-bot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /ping
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN
+        sync: false          # вводиться вручну в Render Dashboard, НЕ в гіт
+      - key: ALLOWED_GROUP_IDS
+        sync: false
+      - key: DISABLED_THREADS
+        sync: false
+      - key: ALLOW_OPEN_MODE
+        value: "false"
+      - key: LOG_LEVEL
+        value: "INFO"

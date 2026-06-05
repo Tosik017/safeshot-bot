@@ -1,0 +1,12 @@
+# playwright МУСИТЬ точно збігатися з тегом образу у Dockerfile (v1.60.0-noble),
+# інакше Chromium не знайдеться. Браузери вже в образі — playwright install не треба.
+aiogram>=3.13,<4
+playwright==1.60.0
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+httpx>=0.27,<1
+selectolax>=0.3.21,<0.4
+cachetools>=5.3,<7
+loguru>=0.7,<0.8
+psutil>=5.9,<8
+Pillow>=12.2,<13

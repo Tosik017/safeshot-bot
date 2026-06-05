@@ -1,0 +1,27 @@
+# Локальне тестування на Pop!_OS з посиленою ізоляцією (cap-drop, read-only,
+# non-root, ліміти памʼяті/процесів). Render Free цього не вміє — там лишається
+# тільки non-root + --no-sandbox. Тут можна піти далі.
+services:
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      PORT: "8000"
+      # Для СПРАВЖНЬОГО sandbox: CHROMIUM_SANDBOX=on + security_opt seccomp нижче.
+      # За замовчуванням лишаємо як на Render (--no-sandbox), але з cap-drop.
+    ports:
+      - "8000:8000"
+    ipc: host                  # Chromium у контейнері: уникнути падінь через /dev/shm
+    user: pwuser               # non-root
+    read_only: true            # коренева FS лише для читання
+    tmpfs:
+      - /tmp:size=256m
+      - /home/pwuser/.cache:size=256m
+    cap_drop: [ALL]            # прибираємо всі capabilities
+    security_opt:
+      - no-new-privileges:true
+      # Для CHROMIUM_SANDBOX=on додайте офіційний seccomp-профіль Playwright:
+      # - seccomp=./seccomp_profile.json
+    mem_limit: 512m
+    pids_limit: 256
+    restart: unless-stopped

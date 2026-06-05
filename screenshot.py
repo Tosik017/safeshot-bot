@@ -1,0 +1,238 @@
+"""Playwright + Pillow: безпечний рендер недовіреного сайту в PNG-превʼю.
+Ключове проти OOM: захоплюємо ОБМЕЖЕНУ висоту на рівні браузера (не full_page).
+Ключове проти SSRF: is_safe на КОЖЕН запит у route handler + повторно перед goto."""
+import asyncio
+import os
+from io import BytesIO
+
+import psutil
+from PIL import Image
+from loguru import logger
+from playwright.async_api import async_playwright
+
+import security
+from config import USER_AGENT, TIMEOUT_MS, PAUSE_MS, SEMAPHORE, CHROMIUM_SANDBOX
+from metadata import parse_from_html
+
+semaphore = asyncio.Semaphore(SEMAPHORE)
+_browser = None
+_pw = None  # держимо playwright-інстанс, щоб коректно перезапускати браузер
+
+# Кожні RESTART_EVERY скриншотів перезапускаємо браузер — Playwright поступово
+# роздуває V8 heap і internal page cache. ~50 запитів = кілька годин на Render Free.
+_request_count = 0
+RESTART_EVERY = 50
+
+DEVICE_SCALE = 2  # ретина-якість (фіз. px = логіч. × DEVICE_SCALE)
+MOBILE_WIDTH = 390
+MOBILE_HEIGHT = 844
+PART_HEIGHT = 1280              # висота частини; Telegram ліміт ~10 МБ на фото
+MAX_PARTS = 4                   # анти-OOM на Render Free (512 МБ)
+MAX_HEIGHT = PART_HEIGHT * MAX_PARTS
+# Обмежуємо висоту ЗАХВАТУ на рівні браузера (а не постфактум у Pillow): full_page
+# рендерить усю сторінку в один битмап до повернення байтів → на лістингах OOM.
+MAX_CAPTURE_HEIGHT = MAX_HEIGHT // DEVICE_SCALE  # 2560 CSS px
+
+# Мінімальний stealth без зовнішньої залежності (фрагментний playwright-stealth
+# зі застарілим API прибрано). Ховає найочевидніший маркер автоматизації.
+_STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+window.chrome = window.chrome || {runtime: {}};
+Object.defineProperty(navigator, 'languages', {get: () => ['uk-UA','uk','ru','en']});
+Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+"""
+
+COOKIE_SELECTORS = [
+    "button[id*='accept']", "button[class*='accept']",
+    "button[aria-label*='Accept']", "button[aria-label*='Agree']",
+    "[id*='cookie'] button", "[class*='cookie'] button", "[class*='consent'] button",
+]
+
+AD_HOSTS = (
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+    "adnxs.com", "criteo.com", "taboola.com", "outbrain.com",
+    "facebook.net", "google-analytics.com", "mc.yandex.ru", "counter.yadro.ru",
+)
+
+
+def _launch_args() -> list[str]:
+    args = [
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",     # /dev/shm малий у контейнері
+        "--disable-gpu",
+        "--no-first-run",
+        "--no-zygote",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-default-apps",
+        "--disable-sync",
+        "--disable-translate",
+        "--mute-audio",
+        "--hide-scrollbars",
+        "--disable-remote-fonts",
+        # WebRtc → leak локального IP контейнера; решта — зайвий attack surface.
+        "--disable-features=WebRtc,Translate,InterestCohort,AcceptCHFrame",
+    ]
+    # На Render Free sandbox недоступний (немає userns/seccomp) → --no-sandbox.
+    # Контейнер працює від non-root pwuser, тож втеча рендера ≠ root.
+    # Локально/VPS із seccomp: CHROMIUM_SANDBOX=on → справжня ізоляція.
+    if not CHROMIUM_SANDBOX:
+        args.insert(0, "--no-sandbox")
+    return args
+
+
+def log_ram(label: str):
+    mb = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
+    logger.info(f"[RAM | {label}] {mb:.1f} MB")
+
+
+async def init():
+    global _browser, _pw
+    _pw = await async_playwright().start()
+    _browser = await _pw.chromium.launch(headless=True, args=_launch_args())
+    log_ram("Browser started")
+
+
+async def _restart_browser():
+    """Перезапуск для скидання памʼяті Playwright. Викликається між запитами
+    (семафор уже захоплено) → безпечно."""
+    global _browser, _pw, _request_count
+    logger.info(f"[BROWSER RESTART] after {RESTART_EVERY} requests — clearing V8 heap")
+    log_ram("Before restart")
+    try:
+        await _browser.close()
+    except Exception as e:
+        logger.warning(f"Browser close error (non-critical): {e}")
+    try:
+        await _pw.stop()
+    except Exception as e:
+        logger.warning(f"Playwright stop error (non-critical): {e}")
+    await init()
+    _request_count = 0
+    log_ram("After restart")
+
+
+async def _route_handler(route):
+    req = route.request
+    url = req.url
+
+    # SSRF на КОЖЕН запит: subresource/iframe/fetch/редирект на внутрішній
+    # адрес → abort. Це закриває вихід у внутрішню мережу зсередини Chromium
+    # (top-level URL уже перевірено, але підресурси — ні). data:/blob: не мають
+    # host і не йдуть у мережу → пропускаємо.
+    if url.startswith(("http://", "https://")) and not security.is_safe(url):
+        await route.abort()
+        return
+
+    if req.resource_type in ("media", "websocket"):
+        await route.abort(); return
+    if any(url.endswith(ext) for ext in (".woff", ".woff2", ".ttf", ".otf", ".eot")):
+        await route.abort(); return
+    if any(ext in url for ext in (".mp4", ".webm", ".avi", ".mov")):
+        await route.abort(); return
+    if any(host in url for host in AD_HOSTS):
+        await route.abort(); return
+
+    await route.continue_()
+
+
+def _split_image(png_bytes: bytes) -> list[bytes]:
+    """Нарізка через Pillow на частини по PART_HEIGHT. Захват уже обмежений
+    на рівні браузера, тож crop тут — лише страховка."""
+    img = Image.open(BytesIO(png_bytes))
+    width, height = img.size
+
+    if height > MAX_HEIGHT:
+        img = img.crop((0, 0, width, MAX_HEIGHT))
+        height = MAX_HEIGHT
+
+    if height <= PART_HEIGHT:
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return [buf.getvalue()]
+
+    parts = []
+    top = 0
+    while top < height:
+        bottom = min(top + PART_HEIGHT, height)
+        part = img.crop((0, top, width, bottom))
+        buf = BytesIO()
+        part.save(buf, format="PNG")
+        parts.append(buf.getvalue())
+        top = bottom
+
+    logger.info(f"Split into {len(parts)} parts, total height={height}px")
+    return parts
+
+
+async def shoot(url: str) -> tuple[list[bytes], dict]:
+    """Повертає (список частин скриншота, метадані)."""
+    global _request_count
+
+    # Друга перевірка SSRF безпосередньо перед навігацією — звужує вікно
+    # DNS-rebinding між перевіркою в bot.py і реальним резолвом Chromium.
+    if not security.is_safe(url):
+        logger.warning("SSRF re-check failed before goto")
+        return [], {}
+
+    log_ram("Before screenshot")
+    async with semaphore:
+        _request_count += 1
+        if _request_count >= RESTART_EVERY:
+            await _restart_browser()
+
+        ctx = await _browser.new_context(
+            viewport={"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT},
+            user_agent=USER_AGENT,
+            device_scale_factor=DEVICE_SCALE,
+            accept_downloads=False,    # не зберігаємо завантаження зі сторінки
+            service_workers="block",   # SW міг би слати запити у фоні (до C2)
+            ignore_https_errors=False,
+        )
+        try:
+            await ctx.add_init_script(_STEALTH_JS)
+            page = await ctx.new_page()
+            await page.route("**/*", _route_handler)
+
+            await page.goto(url, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
+            await page.wait_for_timeout(PAUSE_MS)
+            await _close_cookies(page)
+
+            html = await page.content()
+            browser_meta = parse_from_html(html, url)
+            logger.info(f"Browser meta: title={browser_meta.get('title')} price={browser_meta.get('price')}")
+
+            doc_height = await page.evaluate(
+                "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, "
+                "document.body.offsetHeight, document.documentElement.offsetHeight)"
+            )
+            capture_h = min(max(int(doc_height), MOBILE_HEIGHT), MAX_CAPTURE_HEIGHT)
+            logger.info(f"Capture height: doc={int(doc_height)} -> clamp={capture_h} CSS px")
+
+            await page.set_viewport_size({"width": MOBILE_WIDTH, "height": capture_h})
+            await page.wait_for_timeout(500)  # reflow після зміни viewport
+
+            full_png = await page.screenshot(animations="disabled", timeout=20_000)
+            log_ram("After screenshot")
+
+            parts = _split_image(full_png)
+            return parts, browser_meta
+
+        except Exception as e:
+            logger.warning(f"Screenshot failed: {type(e).__name__}")
+            return [], {}
+
+        finally:
+            await ctx.close()
+
+
+async def _close_cookies(page):
+    for sel in COOKIE_SELECTORS:
+        try:
+            btn = page.locator(sel).first
+            if await btn.is_visible(timeout=500):
+                await btn.click()
+                await page.wait_for_timeout(500)
+                return
+        except Exception:
+            continue
