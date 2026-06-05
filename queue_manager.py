@@ -12,9 +12,6 @@ from config import (
     MAX_QUEUE_SIZE, TASK_TIMEOUT_SEC, MAX_INFLIGHT_PER_CHAT, RAM_LIMIT_MB,
 )
 
-# Ключ дедуплікації: (chat_id, thread_id, url).
-DedupKey = tuple
-
 
 @dataclass
 class QueueTask:
@@ -30,7 +27,7 @@ class QueueFull(Exception):
 
 
 _queue: asyncio.Queue = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
-_inflight: dict = {}                       # key -> Future
+_inflight: dict = {}                        # key -> Future
 _inflight_by_chat: dict = defaultdict(int)  # chat_id -> count
 _worker_task = None
 _processor = None
