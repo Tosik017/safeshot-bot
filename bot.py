@@ -185,6 +185,29 @@ DISCLAIMER = (
     "🔎 Безпечніше знайти цей товар через пошук Google."
 )
 
+# Стійкий анти-фішинг банер. Замінює статус «Готую перегляд» (НЕ видаляємо його),
+# лишається над прев'ю. Статичний текст → parse_mode=HTML безпечний (немає вводу юзера).
+ANTIPHISH_NOTICE = (
+    "🛡 <b>БЕЗПЕЧНИЙ ПЕРЕГЛЯД готовий — дивись нижче</b> 👇\n\n"
+    "🚨 <b>НЕ переходь за посиланням, поки не перевірив його.</b>\n"
+    "<blockquote>Ознаки шахрайства:\n"
+    "• домен із підміною (g00gle, olx-ua.com, дивні .top/.xyz)\n"
+    "• просять логін, пароль, дані картки або код із SMS\n"
+    "• тиснуть: «терміново», «оплати зараз», таймер зворотного відліку\n"
+    "• ціна «занадто вигідна», передоплата/завдаток на картку</blockquote>\n"
+    "✅ <b>Безпечно:</b> знайди той самий товар сам через Google або офіційний застосунок.\n"
+    "🔐 Паролі та дані картки не вводь на незнайомому сайті — ніколи."
+)
+
+
+async def _show_notice(status):
+    """Замість видалення статусу робимо його стійким анти-фішинг банером."""
+    try:
+        await status.edit_text(ANTIPHISH_NOTICE, parse_mode="HTML")
+    except Exception as e:
+        logger.info(f"notice edit skipped: {e}")
+
+
 def build_message(meta: dict) -> tuple[str, list[MessageEntity]]:
     text = ""
     entities = []
@@ -435,7 +458,11 @@ async def handle(msg: Message, bot: Bot):
     except Exception as e:
         logger.error(f"FAIL url-task error={type(e).__name__}")
         cache.save_failure(url, type(e).__name__)
-        await status.edit_text("❌ Не вдалось обробити посилання.")
+        await status.edit_text(
+            "❌ Не вдалось зробити безпечне прев'ю.\n"
+            "🚨 Тим більше не переходь за посиланням — спробуй пізніше "
+            "або знайди товар через Google."
+        )
         return
 
     httpx_meta = await httpx_task
@@ -494,7 +521,13 @@ async def handle(msg: Message, bot: Bot):
     except Exception as e:
         logger.error(f"FAIL send error={type(e).__name__}")
         cache.save_failure(url, type(e).__name__)
-        await status.edit_text("❌ Не вдалось обробити посилання.")
+        await status.edit_text(
+            "❌ Не вдалось зробити безпечне прев'ю.\n"
+            "🚨 Тим більше не переходь за посиланням — спробуй пізніше "
+            "або знайди товар через Google."
+        )
         return
 
-    await status.delete()
+    # Статус «Готую перегляд» не видаляємо, а лишаємо як стійкий анти-фішинг банер
+    # над прев'ю (максимально броске й корисне нагадування).
+    await _show_notice(status)
