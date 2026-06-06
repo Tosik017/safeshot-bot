@@ -1,6 +1,8 @@
 """Playwright + Pillow: безпечний рендер недовіреного сайту в PNG-превʼю.
 Ключове проти OOM: захоплюємо ОБМЕЖЕНУ висоту на рівні браузера (не full_page).
-Ключове проти SSRF: is_safe на КОЖЕН запит у route handler + повторно перед goto."""
+Ключове проти SSRF: is_safe на КОЖЕН запит у route handler + повторно перед goto.
+Концепт візуальний → images/CSS НЕ блокуємо; ріжемо лише те, що для статичного
+скриншота не потрібне (відео/аудіо, websocket, шрифти, реклама/трекери)."""
 import asyncio
 import os
 from io import BytesIO
@@ -48,36 +50,70 @@ COOKIE_SELECTORS = [
     "[id*='cookie'] button", "[class*='cookie'] button", "[class*='consent'] button",
 ]
 
+# Типи ресурсів, не потрібні для статичного скриншота → ріжемо (швидкість + RAM).
+# images/stylesheet/document/script НЕ чіпаємо — без них превʼю зламається.
+_BLOCK_RESOURCE_TYPES = {"media", "websocket", "font"}
+
+# Реклама/трекери: чистий шум для скриншота, з'їдають час і памʼять.
+# Якщо на якомусь сайті через GTM раптом зникне ціна — прибери "googletagmanager.com".
 AD_HOSTS = (
     "doubleclick.net", "googlesyndication.com", "googleadservices.com",
-    "adnxs.com", "criteo.com", "taboola.com", "outbrain.com",
+    "googletagmanager.com", "adnxs.com", "criteo.com", "taboola.com", "outbrain.com",
     "facebook.net", "google-analytics.com", "mc.yandex.ru", "counter.yadro.ru",
+    "hotjar.com", "clarity.ms", "scorecardresearch.com", "quantserve.com",
+    "amazon-adsystem.com", "pubmatic.com", "rubiconproject.com", "casalemedia.com",
+    "adsrvr.org", "sentry.io",
 )
 
 
 def _launch_args() -> list[str]:
     args = [
         "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",     # /dev/shm малий у контейнері
+        "--disable-dev-shm-usage",                 # /dev/shm малий у контейнері
         "--disable-gpu",
+        "--disable-software-rasterizer",           # без GPU не тримаємо ще й SW-растер
+        "--disable-3d-apis",                        # вимикаємо WebGL → менше GPU/ANGLE surface і RAM
         "--no-first-run",
+        "--no-default-browser-check",
         "--no-zygote",
         "--disable-extensions",
-        "--disable-background-networking",
+        "--disable-background-networking",          # жодних фонових з'єднань браузера
+        "--disable-component-update",               # не тягнемо апдейти компонентів/моделей
+        "--disable-domain-reliability",             # не шлемо телеметрію надійності в Google
+        "--disable-breakpad",                       # без crash-дампів
+        "--metrics-recording-only",                 # метрики не вивантажуються
         "--disable-default-apps",
         "--disable-sync",
         "--disable-translate",
+        "--disable-hang-monitor",                   # без діалогів "сторінка не відповідає"
+        "--disable-client-side-phishing-detection",
+        "--disable-prompt-on-repost",
+        "--disable-background-timer-throttling",    # таймери не тротляться → JS-ціна встигає відрендеритись
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
         "--mute-audio",
         "--hide-scrollbars",
         "--disable-remote-fonts",
-        # WebRtc → leak локального IP контейнера; решта — зайвий attack surface.
-        "--disable-features=WebRtc,Translate,InterestCohort,AcceptCHFrame",
+        # WebRtc → leak локального IP; OptimizationGuide* → не качаємо on-device
+        # AI/optimization-модель (зайвий трафік/диск на Free); AsyncDns → системний
+        # резолвер замість вбудованого (узгоджено з security.is_safe → менше зазору
+        # для DNS-rebinding); решта — фонова мережа/синк/зайвий surface.
+        "--disable-features=WebRtc,Translate,InterestCohort,AcceptCHFrame,"
+        "MediaRouter,DialMediaRouteProvider,OptimizationHints,"
+        "OptimizationGuideOnDeviceModel,OptimizationGuideModelDownloading,"
+        "BackForwardCache,AsyncDns",
     ]
     # На Render Free sandbox недоступний (немає userns/seccomp) → --no-sandbox.
     # Контейнер працює від non-root pwuser, тож втеча рендера ≠ root.
     # Локально/VPS із seccomp: CHROMIUM_SANDBOX=on → справжня ізоляція.
     if not CHROMIUM_SANDBOX:
         args.insert(0, "--no-sandbox")
+    # JITLESS=on вимикає V8 JIT — найбільше зрізає RCE-поверхню (так роблять
+    # безпековики), АЛЕ суттєво сповільнює важкі JS-сторінки. У нас уже були
+    # таймаути 90с (OLX) → за замовчуванням ВИМКНЕНО, щоб не плодити текстові
+    # фолбеки. Вмикати свідомо, якщо ризик важливіший за швидкість/повноту.
+    if os.environ.get("JITLESS", "").lower() == "on":
+        args.append("--js-flags=--jitless")
     return args
 
 
@@ -116,22 +152,21 @@ async def _route_handler(route):
     req = route.request
     url = req.url
 
-    # SSRF на КОЖЕН запит: subresource/iframe/fetch/редирект на внутрішній
-    # адрес → abort. Це закриває вихід у внутрішню мережу зсередини Chromium
-    # (top-level URL уже перевірено, але підресурси — ні). data:/blob: не мають
-    # host і не йдуть у мережу → пропускаємо.
+    # 1) SSRF на КОЖЕН запит: subresource/iframe/fetch/редирект на внутрішній
+    # адрес → abort. data:/blob: не мають host і не йдуть у мережу → пропускаємо.
     if url.startswith(("http://", "https://")) and not security.is_safe(url):
         await route.abort()
         return
 
-    if req.resource_type in ("media", "websocket"):
-        await route.abort(); return
-    if any(url.endswith(ext) for ext in (".woff", ".woff2", ".ttf", ".otf", ".eot")):
-        await route.abort(); return
-    if any(ext in url for ext in (".mp4", ".webm", ".avi", ".mov")):
-        await route.abort(); return
+    # 2) Важкий/непотрібний для статичного скриншота контент.
+    if req.resource_type in _BLOCK_RESOURCE_TYPES:
+        await route.abort()
+        return
+
+    # 3) Реклама/трекери — шум, що з'їдає час і RAM.
     if any(host in url for host in AD_HOSTS):
-        await route.abort(); return
+        await route.abort()
+        return
 
     await route.continue_()
 
