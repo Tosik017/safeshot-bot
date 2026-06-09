@@ -213,7 +213,10 @@ async def shoot(url: str) -> tuple[list[bytes], dict]:
     log_ram("Before screenshot")
     async with semaphore:
         _request_count += 1
-        if _request_count >= RESTART_EVERY:
+        # Плановий рестарт (скид V8 heap) АБО аварійний — браузер відсутній/відвалився
+        # (напр. OOM-кілл рендерера). Без перевірки is_connected впав би new_context на
+        # кожному запиті аж до RESTART_EVERY → до 50 відмов поспіль. Тут самовідновлення.
+        if _request_count >= RESTART_EVERY or _browser is None or not _browser.is_connected():
             await _restart_browser()
 
         ctx = await _browser.new_context(
@@ -250,7 +253,9 @@ async def shoot(url: str) -> tuple[list[bytes], dict]:
             full_png = await page.screenshot(animations="disabled", timeout=20_000)
             log_ram("After screenshot")
 
-            parts = _split_image(full_png)
+            # Pillow синхронний → виносимо нарізку/encode у тред, щоб не блокувати
+            # event loop (інакше на час crop/PNG-encode стоять polling і httpx-task).
+            parts = await asyncio.to_thread(_split_image, full_png)
             return parts, browser_meta
 
         except Exception as e:
