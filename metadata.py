@@ -17,9 +17,19 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
 ]
 
+# Стандартні redirect-статуси, які проходимо ВРУЧНУ (a не follow_redirects=True).
+_REDIRECT_CODES = (301, 302, 303, 307, 308)
+_MAX_HOPS = 4  # вихідний запит + до 3 редиректів (як було max_redirects=3)
+
 
 async def fetch(url: str) -> dict:
-    """Один запит — перший успішний. Стрімимо тіло з лімітом розміру."""
+    """Один запит — перший успішний. Стрімимо тіло з лімітом розміру.
+
+    SSRF: follow_redirects ВИМКНЕНО. httpx із follow_redirects=True сам фізично
+    конектиться до КОЖНОГО проміжного хоста цепочки 30x ДО того, як ми перевіримо
+    фінальний URL — це blind-SSRF (IMDS, внутрішні сервіси, порт-скан). Тому
+    проходимо редиректи вручну й перевіряємо is_safe на КОЖЕН хоп ПЕРЕД запитом —
+    до небезпечного хоста запит не йде взагалі (та сама модель, що в screenshot)."""
     for ua in USER_AGENTS:
         try:
             headers = {
@@ -27,26 +37,40 @@ async def fetch(url: str) -> dict:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "uk,ru;q=0.9,en;q=0.8",
             }
-            async with httpx.AsyncClient(
-                follow_redirects=True, timeout=8, max_redirects=3
-            ) as client:
-                async with client.stream("GET", url, headers=headers) as r:
-                    # SSRF: редирект міг привести на внутрішній хост. Перевіряємо
-                    # фінальний URL ДО читання тіла — не тягнемо внутрішню сторінку.
-                    final_url = str(r.url)
-                    if final_url != url and not security.is_safe(final_url):
-                        logger.warning("SSRF blocked redirect (final host private)")
+            body = None
+            encoding = "utf-8"
+            async with httpx.AsyncClient(follow_redirects=False, timeout=8) as client:
+                current = url
+                for _ in range(_MAX_HOPS):
+                    # Перевірка ПЕРЕД запитом: небезпечний хоп → нічого не конектимо.
+                    if not security.is_safe(current):
+                        logger.warning("SSRF blocked metadata hop (host not safe)")
                         return {}
-                    total = 0
-                    chunks = []
-                    async for chunk in r.aiter_bytes():
-                        total += len(chunk)
-                        if total > MAX_BODY_BYTES:  # анти-OOM / gzip-bomb
-                            logger.warning(f"Metadata body too large (> {MAX_BODY_BYTES} B)")
-                            return {}
-                        chunks.append(chunk)
-                    body = b"".join(chunks)
-                    encoding = r.encoding or "utf-8"
+                    async with client.stream("GET", current, headers=headers) as r:
+                        if r.status_code in _REDIRECT_CODES:
+                            loc = r.headers.get("location")
+                            if not loc:
+                                return {}
+                            # Відносний Location резолвимо відносно поточного URL.
+                            current = str(httpx.URL(current).join(loc))
+                            continue
+                        # Фінальна відповідь — current уже перевірено is_safe вище.
+                        total = 0
+                        chunks = []
+                        async for chunk in r.aiter_bytes():
+                            total += len(chunk)
+                            if total > MAX_BODY_BYTES:  # анти-OOM / gzip-bomb
+                                logger.warning(f"Metadata body too large (> {MAX_BODY_BYTES} B)")
+                                return {}
+                            chunks.append(chunk)
+                        body = b"".join(chunks)
+                        encoding = r.encoding or "utf-8"
+                        break
+                else:
+                    logger.warning("Metadata too many redirects")
+                    return {}
+            if body is None:
+                continue
             text = body.decode(encoding, errors="replace")
             result = _parse(text, url)
             if result.get("title") and result["title"] not in ("", url):
