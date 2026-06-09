@@ -1,6 +1,7 @@
 import asyncio
 import signal
 import sys
+import time
 
 import uvicorn
 from fastapi import FastAPI
@@ -21,6 +22,11 @@ logger.add(sys.stderr, level=LOG_LEVEL, backtrace=False, diagnose=False)
 app = FastAPI()
 _bot: Bot | None = None
 
+# Кеш результату getMe для /health (M-1). /health відкритий → потік запитів інакше
+# смикав би getMe до Telegram на КОЖЕН запит (rate-limit + звʼязування корутин по 5с,
+# DoS-амплітфікація). Оновлюємо не частіше ніж раз на 20с.
+_last_me = {"ts": 0.0, "ok": False}
+
 
 @app.get("/")
 @app.head("/")
@@ -38,21 +44,29 @@ async def ping():
 async def health():
     # Мінімум розкриття: лише статус і булеві прапорці. Внутрішні лічильники
     # черги/кешу НЕ віддаємо назовні (recon для DoS) — вони лишаються в логах.
-    browser_ok = screenshot._browser is not None
-    bot_ok = False
-    if _bot is not None:
+    # browser: жив І підключений (is_connected ловить мертвий процес Chromium).
+    browser_ok = screenshot._browser is not None and screenshot._browser.is_connected()
+    # worker: супервізорний таск живий. Ловить тиху смерть черги (R-1).
+    wt = queue_manager._worker_task
+    worker_ok = wt is not None and not wt.done()
+    # bot: getMe з кешем на 20с (M-1).
+    now = time.monotonic()
+    if _bot is not None and now - _last_me["ts"] > 20:
         try:
             await asyncio.wait_for(_bot.get_me(), timeout=5)
-            bot_ok = True
+            _last_me.update(ts=now, ok=True)
         except Exception:
-            bot_ok = False
-    status = "ok" if (browser_ok and bot_ok) else "degraded"
+            _last_me.update(ts=now, ok=False)
+    bot_ok = _last_me["ok"]
+    status = "ok" if (browser_ok and bot_ok and worker_ok) else "degraded"
     code = 200 if status == "ok" else 503
-    return JSONResponse(status_code=code, content={"status": status, "browser": browser_ok, "bot": bot_ok})
+    return JSONResponse(status_code=code, content={
+        "status": status, "browser": browser_ok, "bot": bot_ok, "worker": worker_ok,
+    })
 
 
 async def shutdown(dp: Dispatcher, server: uvicorn.Server):
-    logger.info("SIGTERM received — starting graceful shutdown")
+    logger.info("Shutdown signal received — starting graceful shutdown")
     await dp.stop_polling()
     logger.info("Polling stopped")
 
@@ -99,9 +113,17 @@ async def main():
         uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level=LOG_LEVEL.lower())
     )
 
+    # Вимикаємо власні signal-handler'и uvicorn (№3): інакше він перехоплює
+    # SIGTERM/SIGINT першим, рве свій loop, і наш shutdown() (штатне закриття
+    # браузера) не встигає → косметичний RuntimeError: Event loop is closed від
+    # фіналізатора subprocess Chromium. Реєструємо ЄДИНИЙ обробник на обидва
+    # сигнали — наш shutdown().
+    server.install_signal_handlers = lambda: None
+
     # get_running_loop замість застарілого get_event_loop (ми вже всередині run()).
     loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(shutdown(dp, server)))
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown(dp, server)))
 
     await asyncio.gather(dp.start_polling(_bot), server.serve())
 
