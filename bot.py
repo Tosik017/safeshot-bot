@@ -415,6 +415,12 @@ async def handle(msg: Message, bot: Bot):
     screenshot.log_ram("Start request")
 
     if not security.is_safe(url):
+        # ВАЖЛИВО: знімаємо позначку dup для заблокованого URL. Інакше повторне
+        # (по-людськи) надсилання тієї ж недоступної ссылки впаде у ветку
+        # _handle_duplicate_spam → видалення + ескалація → mute за «спам».
+        # Заблокований URL ніколи не йшов у роботу — це не дубль.
+        if user_id is not None:
+            _dup_seen.pop((chat_id, user_id, url), None)
         await msg.reply("🚫 Посилання веде на недоступний ресурс.")
         return
 
