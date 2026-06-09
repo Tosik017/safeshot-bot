@@ -97,9 +97,24 @@ async def _worker():
             _queue.task_done()
 
 
+async def _worker_supervised():
+    """Наглядач над _worker: якщо корутина впаде по причині ПОЗА внутрішнім
+    try (напр. збій у _queue.get або в finally) — без цього черга мовчки стане
+    назавжди, а /health рапортує 'ok'. CancelledError пропускаємо — це штатна
+    відміна при shutdown, не аварія."""
+    while True:
+        try:
+            await _worker()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"Queue worker crashed, restarting in 1s: {type(e).__name__}")
+            await asyncio.sleep(1)
+
+
 def start_worker():
     global _worker_task
-    _worker_task = asyncio.create_task(_worker())
+    _worker_task = asyncio.create_task(_worker_supervised())
 
 
 def get_stats() -> dict:
