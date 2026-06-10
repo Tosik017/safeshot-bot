@@ -1,12 +1,12 @@
 """Черга на скриншот: ліміт глибини + per-chat квота + RAM-watchdog +
 дедуплікація + глобальний таймаут. Один воркер (відповідає SEMAPHORE=1)."""
 import asyncio
-import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-import psutil
 from loguru import logger
+
+import ram
 
 from config import (
     MAX_QUEUE_SIZE, TASK_TIMEOUT_SEC, MAX_INFLIGHT_PER_CHAT, RAM_LIMIT_MB,
@@ -33,22 +33,6 @@ _worker_task = None
 _processor = None
 
 
-def _total_rss_mb() -> tuple[float, float]:
-    """(python_MB, children_MB). Render рахує ВЕСЬ cgroup → Chromium-діти теж.
-    Раніше watchdog бачив лише python-процес (~170MB) і був сліпий до
-    Chromium — OOM-кілл приходив 'нізвідки'. Дитина могла померти між
-    children() і memory_info() → ловимо psutil.Error поштучно."""
-    p = psutil.Process(os.getpid())
-    own = p.memory_info().rss
-    child = 0
-    for c in p.children(recursive=True):
-        try:
-            child += c.memory_info().rss
-        except psutil.Error:
-            continue
-    return own / 1048576, child / 1048576
-
-
 def register_processor(processor):
     global _processor
     _processor = processor
@@ -62,14 +46,13 @@ async def enqueue(key, url):
         return _inflight[key], 0, True
 
     # RAM-watchdog: біля межі 512MB не беремо нову задачу (анти-OOM).
-    # Рахуємо python + ВСІ child-процеси (Chromium) — як рахує Render.
-    own_mb, child_mb = _total_rss_mb()
-    total_mb = own_mb + child_mb
-    if total_mb > RAM_LIMIT_MB:
-        logger.warning(
-            f"QUEUE reject — RAM python={own_mb:.0f} + chromium={child_mb:.0f} "
-            f"= {total_mb:.0f}MB > {RAM_LIMIT_MB}MB"
-        )
+    # Метрика = cgroup (те, що бачить OOM-кіллер Render). Сума RSS рахувала
+    # shared-сторінки Chromium по кілька разів і завищувала на ~25-40%
+    # (637MB "за сумою" при живому 512MB-інстансі) → watchdog хибно відбивав
+    # здоровий інстанс. Деталі/фолбеки в ram.py.
+    used, src = ram.used_mb()
+    if used > RAM_LIMIT_MB:
+        logger.warning(f"QUEUE reject — RAM used={used:.0f}MB ({src}) > {RAM_LIMIT_MB}MB")
         raise QueueFull()
 
     # Per-chat квота: один чат не може зайняти всю чергу (анти-DoS).

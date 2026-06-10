@@ -7,11 +7,11 @@ import asyncio
 import os
 from io import BytesIO
 
-import psutil
 from PIL import Image
 from loguru import logger
 from playwright.async_api import async_playwright
 
+import ram
 import security
 from config import USER_AGENT, TIMEOUT_MS, PAUSE_MS, SEMAPHORE, CHROMIUM_SANDBOX
 from metadata import parse_from_html
@@ -124,18 +124,11 @@ def _launch_args() -> list[str]:
 
 
 def log_ram(label: str):
-    """python + ВСІ child-процеси (Chromium): Render рахує весь cgroup, тож
-    лише власний RSS давав хибне відчуття запасу (167MB перед OOM-кіллом)."""
-    p = psutil.Process(os.getpid())
-    own = p.memory_info().rss
-    child = 0
-    for c in p.children(recursive=True):
-        try:
-            child += c.memory_info().rss
-        except psutil.Error:
-            continue
-    own_mb, child_mb = own / 1048576, child / 1048576
-    logger.info(f"[RAM | {label}] python={own_mb:.1f} + chromium={child_mb:.1f} = {own_mb + child_mb:.1f} MB")
+    """used = cgroup-метрика (як рахує OOM-кіллер Render); rss-розбивка поруч —
+    діагностика, вона ЗАВИЩУЄ (shared-сторінки Chromium по кілька разів)."""
+    used, src = ram.used_mb()
+    own_mb, child_mb = ram.rss_breakdown_mb()
+    logger.info(f"[RAM | {label}] used={used:.1f} MB ({src}; rss: python={own_mb:.1f} + chromium={child_mb:.1f})")
 
 
 async def init():
