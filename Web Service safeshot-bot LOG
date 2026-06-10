@@ -1,0 +1,265 @@
+==> Cloning from https://github.com/Tosik017/safeshot-bot
+==> Checking out commit f743b2bca60779de457fea16997024a7954f922e in branch main
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.31kB done
+#1 DONE 0.0s
+#2 [internal] load metadata for mcr.microsoft.com/playwright/python:v1.60.0-noble
+#2 DONE 0.8s
+#3 [internal] load .dockerignore
+#3 transferring context: 178B done
+#3 DONE 0.0s
+#4 [internal] load build context
+#4 transferring context: 71.89kB done
+#4 DONE 0.0s
+#5 [1/6] FROM mcr.microsoft.com/playwright/python:v1.60.0-noble@sha256:8ff591d613b01c884cc488339ed4318b4513eaf0c57a164a878ba49e70e3f384
+#5 resolve mcr.microsoft.com/playwright/python:v1.60.0-noble@sha256:8ff591d613b01c884cc488339ed4318b4513eaf0c57a164a878ba49e70e3f384 0.0s done
+#5 extracting sha256:2f7571f14c6ff1d57c690bd1924fd1e125936eb144dc51eb20b4172776a5c743
+#5 extracting sha256:2f7571f14c6ff1d57c690bd1924fd1e125936eb144dc51eb20b4172776a5c743 0.7s done
+#5 extracting sha256:b46c78415e01a98b8e258a15aeaacfe35324d806bcb6893b46afe5df15a56925
+#5 extracting sha256:b46c78415e01a98b8e258a15aeaacfe35324d806bcb6893b46afe5df15a56925 17.1s done
+#5 DONE 19.2s
+#5 [1/6] FROM mcr.microsoft.com/playwright/python:v1.60.0-noble@sha256:8ff591d613b01c884cc488339ed4318b4513eaf0c57a164a878ba49e70e3f384
+#5 extracting sha256:fdc2e06bb4cc3ffcb4450af0f23d32cc0ed05ebd711ec2b9d61c001ebe6977d4
+#5 extracting sha256:fdc2e06bb4cc3ffcb4450af0f23d32cc0ed05ebd711ec2b9d61c001ebe6977d4 7.0s done
+#5 DONE 26.2s
+#5 [1/6] FROM mcr.microsoft.com/playwright/python:v1.60.0-noble@sha256:8ff591d613b01c884cc488339ed4318b4513eaf0c57a164a878ba49e70e3f384
+#5 extracting sha256:ac28ea89ba614921e985aa0d7b836796d6c2a5b230c5d8a4791d131863801cf4
+#5 extracting sha256:ac28ea89ba614921e985aa0d7b836796d6c2a5b230c5d8a4791d131863801cf4 42.4s done
+#5 DONE 68.5s
+#6 [2/6] RUN apt-get update  && apt-get install -y --no-install-recommends dumb-init  && rm -rf /var/lib/apt/lists/*
+#6 0.968 Get:1 http://archive.ubuntu.com/ubuntu noble InRelease [256 kB]
+#6 0.981 Get:2 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+#6 1.090 Get:3 http://archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+#6 1.217 Get:4 http://archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+#6 1.397 Get:5 http://archive.ubuntu.com/ubuntu noble/multiverse amd64 Packages [331 kB]
+#6 1.437 Get:6 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages [1808 kB]
+#6 1.462 Get:7 http://security.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [48.4 kB]
+#6 1.478 Get:8 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1514 kB]
+#6 1.486 Get:9 http://archive.ubuntu.com/ubuntu noble/restricted amd64 Packages [117 kB]
+#6 1.495 Get:10 http://archive.ubuntu.com/ubuntu noble/universe amd64 Packages [19.3 MB]
+#6 1.537 Get:11 http://security.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [3807 kB]
+#6 1.635 Get:12 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [2152 kB]
+#6 2.014 Get:13 http://archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [2159 kB]
+#6 2.067 Get:14 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [2528 kB]
+#6 2.168 Get:15 http://archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [4038 kB]
+#6 2.267 Get:16 http://archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [54.6 kB]
+#6 2.272 Get:17 http://archive.ubuntu.com/ubuntu noble-backports/main amd64 Packages [49.0 kB]
+#6 2.279 Get:18 http://archive.ubuntu.com/ubuntu noble-backports/multiverse amd64 Packages [671 B]
+#6 2.287 Get:19 http://archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [35.9 kB]
+#6 2.861 Fetched 38.6 MB in 2s (19.4 MB/s)
+#6 2.861 Reading package lists...
+#6 3.770 Reading package lists...
+#6 4.588 Building dependency tree...
+#6 4.771 Reading state information...
+#6 5.222 The following NEW packages will be installed:
+#6 5.223   dumb-init
+#6 5.255 0 upgraded, 1 newly installed, 0 to remove and 21 not upgraded.
+#6 5.255 Need to get 13.6 kB of archives.
+#6 5.255 After this operation, 33.8 kB of additional disk space will be used.
+#6 5.255 Get:1 http://archive.ubuntu.com/ubuntu noble/universe amd64 dumb-init amd64 1.2.5-3 [13.6 kB]
+#6 5.757 debconf: delaying package configuration, since apt-utils is not installed
+#6 5.896 Fetched 13.6 kB in 0s (401 kB/s)
+#6 6.064 Selecting previously unselected package dumb-init.
+#6 6.064 (Reading database ... 
+(Reading database ... 5%
+(Reading database ... 10%
+(Reading database ... 15%
+(Reading database ... 20%
+(Reading database ... 25%
+(Reading database ... 30%
+(Reading database ... 35%
+(Reading database ... 40%
+(Reading database ... 45%
+(Reading database ... 50%
+(Reading database ... 55%
+(Reading database ... 60%
+(Reading database ... 65%
+(Reading database ... 70%
+(Reading database ... 75%
+(Reading database ... 80%
+(Reading database ... 85%
+(Reading database ... 90%
+(Reading database ... 95%
+(Reading database ... 100%
+(Reading database ... 29006 files and directories currently installed.)
+#6 6.120 Preparing to unpack .../dumb-init_1.2.5-3_amd64.deb ...
+#6 6.141 Unpacking dumb-init (1.2.5-3) ...
+#6 6.310 Setting up dumb-init (1.2.5-3) ...
+#6 DONE 11.8s
+#7 [3/6] WORKDIR /app
+#7 DONE 0.0s
+#8 [4/6] COPY --chown=pwuser:pwuser requirements.txt .
+#8 DONE 0.1s
+#9 [5/6] RUN pip install --no-cache-dir -r requirements.txt
+#9 0.759 Collecting aiogram<4,>=3.13 (from -r requirements.txt (line 3))
+#9 0.845   Downloading aiogram-3.28.2-py3-none-any.whl.metadata (6.7 kB)
+#9 0.898 Collecting playwright==1.60.0 (from -r requirements.txt (line 4))
+#9 0.909   Downloading playwright-1.60.0-py3-none-manylinux1_x86_64.whl.metadata (3.5 kB)
+#9 0.972 Collecting fastapi<1,>=0.115 (from -r requirements.txt (line 5))
+#9 0.983   Downloading fastapi-0.136.3-py3-none-any.whl.metadata (27 kB)
+#9 1.022 Collecting uvicorn<1,>=0.30 (from -r requirements.txt (line 6))
+#9 1.032   Downloading uvicorn-0.49.0-py3-none-any.whl.metadata (6.7 kB)
+#9 1.064 Collecting httpx<1,>=0.27 (from -r requirements.txt (line 7))
+#9 1.074   Downloading httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+#9 1.210 Collecting selectolax<0.4,>=0.3.21 (from -r requirements.txt (line 8))
+#9 1.222   Downloading selectolax-0.3.34-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (1.3 kB)
+#9 1.241 Collecting cachetools<7,>=5.3 (from -r requirements.txt (line 9))
+#9 1.250   Downloading cachetools-6.2.6-py3-none-any.whl.metadata (5.6 kB)
+#9 1.266 Collecting loguru<0.8,>=0.7 (from -r requirements.txt (line 10))
+#9 1.276   Downloading loguru-0.7.3-py3-none-any.whl.metadata (22 kB)
+#9 1.353 Collecting psutil<8,>=5.9 (from -r requirements.txt (line 11))
+#9 1.364   Downloading psutil-7.2.2-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl.metadata (22 kB)
+#9 1.536 Collecting Pillow<13,>=12.2 (from -r requirements.txt (line 12))
+#9 1.548   Downloading pillow-12.2.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (8.8 kB)
+#9 1.566 Collecting pyee<14,>=13 (from playwright==1.60.0->-r requirements.txt (line 4))
+#9 1.576   Downloading pyee-13.0.1-py3-none-any.whl.metadata (3.0 kB)
+#9 1.698 Collecting greenlet<4.0.0,>=3.1.1 (from playwright==1.60.0->-r requirements.txt (line 4))
+#9 1.708   Downloading greenlet-3.5.1-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl.metadata (3.8 kB)
+#9 1.722 Collecting aiofiles<26.0,>=23.2.1 (from aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 1.732   Downloading aiofiles-25.1.0-py3-none-any.whl.metadata (6.3 kB)
+#9 2.201 Collecting aiohttp<3.14,>=3.9.0 (from aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 2.211   Downloading aiohttp-3.13.5-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (8.1 kB)
+#9 2.230 Collecting certifi>=2023.7.22 (from aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 2.240   Downloading certifi-2026.5.20-py3-none-any.whl.metadata (2.5 kB)
+#9 2.265 Collecting magic-filter<1.1,>=1.0.12 (from aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 2.275   Downloading magic_filter-1.0.12-py3-none-any.whl.metadata (1.5 kB)
+#9 2.366 Collecting pydantic<2.14,>=2.4.1 (from aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 2.377   Downloading pydantic-2.13.4-py3-none-any.whl.metadata (109 kB)
+#9 2.409 Collecting typing-extensions<=5.0,>=4.7.0 (from aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 2.419   Downloading typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+#9 2.441 Collecting starlette>=0.46.0 (from fastapi<1,>=0.115->-r requirements.txt (line 5))
+#9 2.452   Downloading starlette-1.2.1-py3-none-any.whl.metadata (6.3 kB)
+#9 2.469 Collecting typing-inspection>=0.4.2 (from fastapi<1,>=0.115->-r requirements.txt (line 5))
+#9 2.479   Downloading typing_inspection-0.4.2-py3-none-any.whl.metadata (2.6 kB)
+#9 2.493 Collecting annotated-doc>=0.0.2 (from fastapi<1,>=0.115->-r requirements.txt (line 5))
+#9 2.503   Downloading annotated_doc-0.0.4-py3-none-any.whl.metadata (6.6 kB)
+#9 2.524 Collecting click>=7.0 (from uvicorn<1,>=0.30->-r requirements.txt (line 6))
+#9 2.535   Downloading click-8.4.1-py3-none-any.whl.metadata (2.6 kB)
+#9 2.550 Collecting h11>=0.8 (from uvicorn<1,>=0.30->-r requirements.txt (line 6))
+#9 2.560   Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+#9 2.580 Collecting anyio (from httpx<1,>=0.27->-r requirements.txt (line 7))
+#9 2.590   Downloading anyio-4.13.0-py3-none-any.whl.metadata (4.5 kB)
+#9 2.608 Collecting httpcore==1.* (from httpx<1,>=0.27->-r requirements.txt (line 7))
+#9 2.618   Downloading httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
+#9 2.636 Collecting idna (from httpx<1,>=0.27->-r requirements.txt (line 7))
+#9 2.646   Downloading idna-3.18-py3-none-any.whl.metadata (6.1 kB)
+#9 2.665 Collecting aiohappyeyeballs>=2.5.0 (from aiohttp<3.14,>=3.9.0->aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 2.675   Downloading aiohappyeyeballs-2.6.2-py3-none-any.whl.metadata (5.9 kB)
+#9 2.688 Collecting aiosignal>=1.4.0 (from aiohttp<3.14,>=3.9.0->aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 2.698   Downloading aiosignal-1.4.0-py3-none-any.whl.metadata (3.7 kB)
+#9 2.714 Collecting attrs>=17.3.0 (from aiohttp<3.14,>=3.9.0->aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 2.724   Downloading attrs-26.1.0-py3-none-any.whl.metadata (8.8 kB)
+#9 2.783 Collecting frozenlist>=1.1.1 (from aiohttp<3.14,>=3.9.0->aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 2.794   Downloading frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (20 kB)
+#9 3.010 Collecting multidict<7.0,>=4.5 (from aiohttp<3.14,>=3.9.0->aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 3.020   Downloading multidict-6.7.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (5.3 kB)
+#9 3.071 Collecting propcache>=0.2.0 (from aiohttp<3.14,>=3.9.0->aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 3.082   Downloading propcache-0.5.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (16 kB)
+#9 3.278 Collecting yarl<2.0,>=1.17.0 (from aiohttp<3.14,>=3.9.0->aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 3.312   Downloading yarl-1.24.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (94 kB)
+#9 3.387 Collecting annotated-types>=0.6.0 (from pydantic<2.14,>=2.4.1->aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 3.397   Downloading annotated_types-0.7.0-py3-none-any.whl.metadata (15 kB)
+#9 3.975 Collecting pydantic-core==2.46.4 (from pydantic<2.14,>=2.4.1->aiogram<4,>=3.13->-r requirements.txt (line 3))
+#9 3.986   Downloading pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.6 kB)
+#9 4.015 Downloading playwright-1.60.0-py3-none-manylinux1_x86_64.whl (47.5 MB)
+#9 4.651    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 47.5/47.5 MB 78.0 MB/s  0:00:00
+#9 4.663 Downloading aiogram-3.28.2-py3-none-any.whl (751 kB)
+#9 4.666    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 751.7/751.7 kB 531.2 MB/s  0:00:00
+#9 4.676 Downloading fastapi-0.136.3-py3-none-any.whl (117 kB)
+#9 4.686 Downloading uvicorn-0.49.0-py3-none-any.whl (71 kB)
+#9 4.696 Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+#9 4.707 Downloading selectolax-0.3.34-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (2.2 MB)
+#9 4.724    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.2/2.2 MB 149.9 MB/s  0:00:00
+#9 4.734 Downloading cachetools-6.2.6-py3-none-any.whl (11 kB)
+#9 4.745 Downloading loguru-0.7.3-py3-none-any.whl (61 kB)
+#9 4.756 Downloading psutil-7.2.2-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl (155 kB)
+#9 4.766 Downloading pillow-12.2.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (7.1 MB)
+#9 4.803    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 7.1/7.1 MB 198.9 MB/s  0:00:00
+#9 4.813 Downloading aiofiles-25.1.0-py3-none-any.whl (14 kB)
+#9 4.824 Downloading aiohttp-3.13.5-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.8 MB)
+#9 4.833    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.8/1.8 MB 221.0 MB/s  0:00:00
+#9 4.844 Downloading greenlet-3.5.1-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (611 kB)
+#9 4.846    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 611.4/611.4 kB 610.5 MB/s  0:00:00
+#9 4.857 Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+#9 4.867 Downloading magic_filter-1.0.12-py3-none-any.whl (11 kB)
+#9 4.877 Downloading multidict-6.7.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (256 kB)
+#9 4.887 Downloading pydantic-2.13.4-py3-none-any.whl (472 kB)
+#9 4.898 Downloading pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+#9 4.906    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 349.8 MB/s  0:00:00
+#9 4.916 Downloading pyee-13.0.1-py3-none-any.whl (15 kB)
+#9 4.926 Downloading typing_extensions-4.15.0-py3-none-any.whl (44 kB)
+#9 4.939 Downloading yarl-1.24.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (105 kB)
+#9 4.949 Downloading aiohappyeyeballs-2.6.2-py3-none-any.whl (15 kB)
+#9 4.959 Downloading aiosignal-1.4.0-py3-none-any.whl (7.5 kB)
+#9 4.969 Downloading annotated_doc-0.0.4-py3-none-any.whl (5.3 kB)
+#9 4.979 Downloading annotated_types-0.7.0-py3-none-any.whl (13 kB)
+#9 4.989 Downloading attrs-26.1.0-py3-none-any.whl (67 kB)
+#9 5.000 Downloading certifi-2026.5.20-py3-none-any.whl (134 kB)
+#9 5.010 Downloading click-8.4.1-py3-none-any.whl (116 kB)
+#9 5.020 Downloading frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (242 kB)
+#9 5.030 Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+#9 5.040 Downloading idna-3.18-py3-none-any.whl (65 kB)
+#9 5.050 Downloading propcache-0.5.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (61 kB)
+#9 5.060 Downloading starlette-1.2.1-py3-none-any.whl (73 kB)
+#9 5.070 Downloading anyio-4.13.0-py3-none-any.whl (114 kB)
+#9 5.080 Downloading typing_inspection-0.4.2-py3-none-any.whl (14 kB)
+#9 5.401 Installing collected packages: typing-extensions, selectolax, psutil, propcache, Pillow, multidict, magic-filter, loguru, idna, h11, greenlet, frozenlist, click, certifi, cachetools, attrs, annotated-types, annotated-doc, aiohappyeyeballs, aiofiles, yarl, uvicorn, typing-inspection, pyee, pydantic-core, httpcore, anyio, aiosignal, starlette, pydantic, playwright, httpx, aiohttp, fastapi, aiogram
+#9 10.81 
+#9 10.82 Successfully installed Pillow-12.2.0 aiofiles-25.1.0 aiogram-3.28.2 aiohappyeyeballs-2.6.2 aiohttp-3.13.5 aiosignal-1.4.0 annotated-doc-0.0.4 annotated-types-0.7.0 anyio-4.13.0 attrs-26.1.0 cachetools-6.2.6 certifi-2026.5.20 click-8.4.1 fastapi-0.136.3 frozenlist-1.8.0 greenlet-3.5.1 h11-0.16.0 httpcore-1.0.9 httpx-0.28.1 idna-3.18 loguru-0.7.3 magic-filter-1.0.12 multidict-6.7.1 playwright-1.60.0 propcache-0.5.2 psutil-7.2.2 pydantic-2.13.4 pydantic-core-2.46.4 pyee-13.0.1 selectolax-0.3.34 starlette-1.2.1 typing-extensions-4.15.0 typing-inspection-0.4.2 uvicorn-0.49.0 yarl-1.24.2
+#9 10.82 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#9 10.82 
+#9 10.82 [notice] A new release of pip is available: 26.1.1 -> 26.1.2
+#9 10.82 [notice] To update, run: python -m pip install --upgrade pip
+#9 DONE 11.4s
+#10 [6/6] COPY --chown=pwuser:pwuser . .
+#10 DONE 0.1s
+#11 exporting to image
+#11 exporting layers
+#11 exporting layers 1.3s done
+#11 exporting manifest sha256:7ea66c08879af909371eadf5231e8c7a116852aaa4938582f951e9ee07582428 done
+#11 exporting config sha256:cde76e44af464f47595c6bc79b98b18f613f9eda894bfa77f5e20e99dc61dde7 done
+#11 pushing layers
+#11 pushing layers 2.8s done
+#11 pushing manifest for image-registry-v2.aws-us-west-2-7.internal.render.com/srv-d8hinff7f7vs73cjmpvg:bld-d8k8hg9o3t8c73aq2jo0@sha256:7ea66c08879af909371eadf5231e8c7a116852aaa4938582f951e9ee07582428
+#11 pushing manifest for image-registry-v2.aws-us-west-2-7.internal.render.com/srv-d8hinff7f7vs73cjmpvg:bld-d8k8hg9o3t8c73aq2jo0@sha256:7ea66c08879af909371eadf5231e8c7a116852aaa4938582f951e9ee07582428 0.1s done
+#11 DONE 4.2s
+#12 exporting cache to registry
+#12 sending cache export
+#12 writing cache image manifest sha256:f778ead94d720663ebd2c4d65a1598a8ac6660430d0f445efc44c78634dfb42c
+#12 sending cache export 4.0s done
+#12 writing cache image manifest sha256:f778ead94d720663ebd2c4d65a1598a8ac6660430d0f445efc44c78634dfb42c 0.1s done
+#12 DONE 4.0s
+==> Deploying...
+==> Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance
+2026-06-09 21:45:09.893 | INFO     | queue_manager:_worker:75 - Queue worker started
+INFO:     Started server process [7]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:10000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:33310 - "HEAD / HTTP/1.1" 200 OK
+INFO:     10.234.24.243:37224 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:37230 - "GET /ping HTTP/1.1" 200 OK
+==> Your service is live 🎉
+INFO:     10.28.44.1:0 - "GET / HTTP/1.1" 200 OK
+==> 
+==> ///////////////////////////////////////////////////////////
+==> 
+==> Available at your primary URL https://safeshot-bot.onrender.com
+==> 
+==> ///////////////////////////////////////////////////////////
+Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8101806705)
+INFO:     10.234.24.243:37232 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:36610 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:36626 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:46998 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:47010 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:37880 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:37888 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:37896 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:54698 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:54704 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:44612 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:44614 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:43552 - "GET /ping HTTP/1.1" 200 OK
+INFO:     10.234.24.243:43560 - "GET /ping HTTP/1.1" 200 OK

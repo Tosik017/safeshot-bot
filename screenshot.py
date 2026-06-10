@@ -1,5 +1,5 @@
 """Playwright + Pillow: безпечний рендер недовіреного сайту в PNG-превʼю.
-Ключове проти OOM: захоплюємо ОБМЕЖЕНУ висоту на рівні браузера (не full_page).
+Ключове проти OOM: захоплюємо ЛИШЕ ПЕРШИЙ ЕКРАН (clip), viewport не розтягуємо.
 Ключове проти SSRF: is_safe на КОЖЕН запит у route handler + повторно перед goto.
 Концепт візуальний → images/CSS НЕ блокуємо; ріжемо лише те, що для статичного
 скриншота не потрібне (відео/аудіо, websocket, шрифти, реклама/трекери)."""
@@ -29,11 +29,14 @@ DEVICE_SCALE = 2  # ретина-якість (фіз. px = логіч. × DEVIC
 MOBILE_WIDTH = 390
 MOBILE_HEIGHT = 844
 PART_HEIGHT = 1280              # висота частини; Telegram ліміт ~10 МБ на фото
-MAX_PARTS = 4                   # анти-OOM на Render Free (512 МБ)
+MAX_PARTS = 4                   # страховка нарізки в _split_image
 MAX_HEIGHT = PART_HEIGHT * MAX_PARTS
-# Обмежуємо висоту ЗАХВАТУ на рівні браузера (а не постфактум у Pillow): full_page
-# рендерить усю сторінку в один битмап до повернення байтів → на лістингах OOM.
-MAX_CAPTURE_HEIGHT = MAX_HEIGHT // DEVICE_SCALE  # 2560 CSS px
+# OOM-фікс (інстанс убило по памʼяті на OLX після мобільного UA): single-message
+# flow шле ЛИШЕ перший кадр → знімаємо ЛИШЕ його. Розтягування viewport до
+# 2560 CSS px змушувало Chromium растеризувати ВСЮ сторінку (5120 фіз.px) —
+# на важких сторінках це >512MB. 640 CSS px × DSF 2 = 1280 фіз.px = 1 кадр
+# = точний розмір заглушки 780×1280 (повідомлення не «стрибає»).
+CAPTURE_CSS = PART_HEIGHT // DEVICE_SCALE  # 640 CSS px — перший екран
 
 # Мінімальний stealth без зовнішньої залежності (фрагментний playwright-stealth
 # зі застарілим API прибрано). Ховає найочевидніший маркер автоматизації.
@@ -173,8 +176,9 @@ async def _route_handler(route):
 
 
 def _split_image(png_bytes: bytes) -> list[bytes]:
-    """Нарізка через Pillow на частини по PART_HEIGHT. Захват уже обмежений
-    на рівні браузера, тож crop тут — лише страховка."""
+    """Нарізка через Pillow на частини по PART_HEIGHT. Після OOM-фікса захват =
+    рівно один кадр (clip 640 CSS px) → тут завжди 1 частина; код лишається
+    як страховка на випадок зміни логіки захвату."""
     img = Image.open(BytesIO(png_bytes))
     width, height = img.size
 
@@ -202,7 +206,8 @@ def _split_image(png_bytes: bytes) -> list[bytes]:
 
 
 async def shoot(url: str) -> tuple[list[bytes], dict]:
-    """Повертає (список частин скриншота, метадані)."""
+    """Повертає (список частин скриншота, метадані).
+    browser_meta["_truncated"]=True → сторінка довша за перший екран."""
     global _request_count
 
     # Друга перевірка SSRF безпосередньо перед навігацією — звужує вікно
@@ -246,22 +251,30 @@ async def shoot(url: str) -> tuple[list[bytes], dict]:
             browser_meta = parse_from_html(html, url)
             logger.info(f"Browser meta: title={browser_meta.get('title')} price={browser_meta.get('price')}")
 
+            # OOM-фікс: viewport НЕ розтягуємо (раніше set_viewport_size до 2560
+            # CSS px → Chromium растеризував усю сторінку → OOM-кілл інстанса на
+            # важких сторінках, OLX після мобільного UA). Знімаємо clip'ом РІВНО
+            # перший екран: 390×640 CSS = 780×1280 фіз.px = розмір заглушки.
+            # doc_height рахуємо лише для чесної позначки «Показано перший екран».
             doc_height = await page.evaluate(
                 "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, "
                 "document.body.offsetHeight, document.documentElement.offsetHeight)"
             )
-            capture_h = min(max(int(doc_height), MOBILE_HEIGHT), MAX_CAPTURE_HEIGHT)
-            logger.info(f"Capture height: doc={int(doc_height)} -> clamp={capture_h} CSS px")
+            truncated = int(doc_height) > CAPTURE_CSS
+            logger.info(f"Capture: doc={int(doc_height)} CSS px -> clip first screen {CAPTURE_CSS} truncated={truncated}")
 
-            await page.set_viewport_size({"width": MOBILE_WIDTH, "height": capture_h})
-            await page.wait_for_timeout(500)  # reflow після зміни viewport
-
-            full_png = await page.screenshot(animations="disabled", timeout=20_000)
+            full_png = await page.screenshot(
+                animations="disabled",
+                timeout=20_000,
+                clip={"x": 0, "y": 0, "width": MOBILE_WIDTH, "height": CAPTURE_CSS},
+            )
             log_ram("After screenshot")
 
             # Pillow синхронний → виносимо нарізку/encode у тред, щоб не блокувати
             # event loop (інакше на час crop/PNG-encode стоять polling і httpx-task).
             parts = await asyncio.to_thread(_split_image, full_png)
+            if truncated:
+                browser_meta["_truncated"] = True  # merge_meta це не переносить — bot.py читає напряму
             return parts, browser_meta
 
         except Exception as e:
