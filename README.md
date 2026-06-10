@@ -1,300 +1,92 @@
-# safeshot-bot
+# SafeShot Bot
 
-Telegram-бот «безопасного просмотра» ссылок для групп. Когда участник группы публикует ссылку, бот рендерит страницу в изолированном headless Chromium, отправляет в чат скриншот с метаданными (название, цена, бренд, рейтинг) и анти-фишинговым предупреждением — чтобы по недоверенной ссылке не пришлось переходить. Сообщения администраторов не обрабатываются.
+Telegram bot for **safe link previews** in group chats. When someone posts a link, the bot opens it in an isolated headless Chromium (full mobile emulation), takes a screenshot, extracts metadata (OG / JSON-LD), and replies with **a single message per link**: an instant warning placeholder that transforms in place into the final preview card — so nobody has to click an unknown link to see what's behind it.
 
-Проект спроектирован под жёсткие ограничения Render Free (512 MB RAM) и принципы secure-by-default / fail-closed.
+Bot UI language: Ukrainian. Built for anti-phishing protection of marketplace/community groups.
 
-## Возможности
+## How it responds (single-message flow)
 
-- Скриншот страницы в мобильном viewport (390×844, device scale 2) с нарезкой длинных страниц на части (до 4 фото по 1280 px, отправка как media group).
-- Извлечение метаданных двумя путями параллельно: быстрый HTTP-запрос (httpx + selectolax: OpenGraph, Twitter Cards, `<title>`, JSON-LD `Product` включая `@graph`) и парсинг HTML из браузера после рендера; результаты объединяются.
-- Карточка товара: название, бренд, цена, рейтинг с числом отзывов, описание, атрибуция отправителя (переживает удаление исходного сообщения), дисклеймер. Форматирование через Telegram entities с корректными UTF-16 offset.
-- Постоянный анти-фишинговый баннер: статус-сообщение «готовлю просмотр» после завершения редактируется в памятку с признаками мошенничества.
-- Трёхуровневая SSRF-защита: проверка URL до очереди, повторно перед навигацией и на **каждый** сетевой запрос Chromium (subresource/iframe/fetch/redirect) через route handler.
-- Контроль нагрузки: очередь глубиной 10, один рендер одновременно, квота 2 задачи на чат, RAM-watchdog (отказ от новых задач выше 430 MB), таймаут задачи 90 с, rate-limit 5 с на пользователя.
-- Анти-спам дубликатами с эскалацией: повтор той же ссылки в окне 120 с → удаление сообщения + предупреждение (редактируется на месте) → на 4-м повторе реальный mute на 5 минут через `restrictChatMember`.
-- Дедупликация in-flight: одновременные запросы одного URL в одном чате/топике склеиваются в один рендер (повторное сообщение получает реакцию 👀).
-- Кэширование результатов по Telegram `file_id` (без хранения байтов) с дифференцированными TTL, включая негативный кэш ошибок.
-- Привязка к разрешённым группам: бот автоматически покидает чужие чаты; denylist отдельных топиков (включая General).
-- Блокировка рекламы/трекеров и тяжёлых ресурсов (media, websocket, fonts) при рендере.
-- Автоматическое закрытие cookie-баннеров по набору селекторов.
-- Плановый перезапуск браузера каждые 50 скриншотов (сброс роста памяти V8).
-- Health-эндпоинты для keepalive и мониторинга, graceful shutdown по SIGTERM с дорендером активной задачи.
+1. A user posts a link → the bot instantly replies with **one photo message**: a warning placeholder image + a short anti-phishing notice (quote-styled caption). 
+2. When the safe preview is ready, the bot **edits that same message** (`editMessageMedia`): the placeholder becomes a screenshot of the page's first screen, the caption becomes a card (site, title, brand, price, rating, description, sender attribution, anti-phishing disclaimer).
+3. If a screenshot is impossible (anti-bot site, timeout), the caption is edited into a text card; the warning image stays. Failures edit the caption into a short warning.
+4. Cached links get the final card immediately, no placeholder stage.
+5. Nothing is ever deleted and no extra messages are posted — **one message per link**, the feed stays clean.
 
-## Архитектура
+Why a photo placeholder: Telegram cannot edit a text message into a photo, so the status message starts as a photo and is morphed via `editMessageMedia`.
 
-| Компонент | Файл | Ответственность |
-|---|---|---|
-| Точка входа | `main.py` | Инициализация браузера, воркера, aiogram-поллинга и uvicorn; логирование; SIGTERM-shutdown |
-| Бизнес-логика | `bot.py` | Фильтры сообщений, анти-спам, оркестрация запроса, формирование карточек, модерация |
-| SSRF-фильтр | `security.py` | Единственный барьер между недоверенным URL и исходящим запросом |
-| Очередь | `queue_manager.py` | Один воркер, лимит глубины, per-chat квота, RAM-watchdog, дедуп, таймаут задачи |
-| Рендер | `screenshot.py` | Playwright/Chromium: контекст на запрос, route handler, клэмп высоты, нарезка Pillow |
-| Метаданные | `metadata.py` | httpx-запрос с лимитом тела и проверкой редиректов; парсер OG/JSON-LD |
-| Кэш | `cache.py` | In-memory TTLCache: `file_id` + метаданные, TTL по типу контента |
-| Конфиг | `config.py` | Все настройки из ENV; fail-fast при небезопасной конфигурации |
-| Health/keepalive | `main.py` (FastAPI) | `/`, `/ping`, `/health` |
+**Trusted domains (whitelist):** links to domains in `TRUSTED_DOMAINS` are not processed at all — the bot silently reacts with 👌. Matching is strict (exact hostname or dot-boundary subdomain; `youtube.com.evil.top` does not match; userinfo tricks and IDN homoglyphs don't pass). Note: ✅ cannot be used — the Bot API allows only a fixed reaction set; if reactions are restricted in your group, allow 👌.
 
-Поток обработки: фильтры → анти-спам → SSRF-чек → кэш → очередь → (параллельно httpx-метаданные) → воркер → SSRF-чек → рендер с route handler'ом → объединение метаданных → отправка → кэш `file_id` → баннер.
+**Mobile format:** Chromium runs full mobile emulation (390×844 viewport, DPR 2, `is_mobile`, `has_touch`, Chrome-for-Android UA), so sites serve their real mobile layout and the preview is readable on phones. Long pages are clamped; only the first screen is sent (marked in the card).
 
-Зависимости модулей однонаправленные; `queue_manager` не зависит от `screenshot` (processor внедряется через `register_processor`).
+## Architecture
 
-## Структура проекта
-
-````
-.
-├── main.py               # запуск: браузер + воркер + polling + uvicorn, shutdown
-├── bot.py                # router aiogram, анти-спам, карточки, модерация
-├── security.py           # SSRF-фильтр is_safe()
-├── queue_manager.py      # очередь задач, квоты, RAM-watchdog
-├── screenshot.py         # Playwright: запуск, route handler, скриншот, нарезка
-├── metadata.py           # httpx-метаданные, парсер OG/JSON-LD
-├── cache.py              # TTL-кэш file_id и метаданных
-├── config.py             # ENV-конфигурация, fail-fast
-├── tests/
-│   └── test_security.py  # smoke-тесты SSRF-фильтра
-├── Dockerfile            # официальный Playwright-образ, non-root, dumb-init
-├── docker-compose.yml    # локальный запуск с усиленной изоляцией
-├── render.yaml           # Render Blueprint
-├── requirements.txt
-├── .env.example
-├── .dockerignore
-└── .gitignore
-````
-
-## Требования
-
-- Docker (рекомендуемый способ) либо Python 3.11+ с системными зависимостями Chromium.
-- ~512 MB RAM минимум (лимиты в коде подогнаны под этот бюджет).
-- Токен бота от @BotFather.
-- Версия pip-пакета `playwright` обязана точно совпадать с тегом Docker-образа (`1.60.0` ↔ `v1.60.0-noble`) — иначе Chromium не будет найден.
-
-## Используемые технологии
-
-| Зависимость | Версия | Назначение |
-|---|---|---|
-| aiogram | >=3.13,<4 | Telegram Bot API (long polling) |
-| playwright | ==1.60.0 | Управление headless Chromium |
-| fastapi | >=0.115,<1 | Health/keepalive HTTP-эндпоинты |
-| uvicorn | >=0.30,<1 | ASGI-сервер для FastAPI |
-| httpx | >=0.27,<1 | Быстрые метаданные без браузера |
-| selectolax | >=0.3.21,<0.4 | Быстрый парсинг HTML (OG/JSON-LD) |
-| cachetools | >=5.3,<7 | Bounded TTL-кэши (кэш результатов, rate-limit, страйки) |
-| loguru | >=0.7,<0.8 | Логирование (без backtrace/diagnose — не утекают значения переменных) |
-| psutil | >=5.9,<8 | RAM-watchdog и логирование памяти |
-| Pillow | >=12.2,<13 | Нарезка скриншота на части |
-| dumb-init | apt | PID 1: доставка сигналов, reaping зомби-процессов Chromium |
-
-## Переменные окружения
-
-| Переменная | Обязательна | Default | Описание |
-|---|---|---|---|
-| `BOT_TOKEN` | да | — | Токен бота. Отсутствие → немедленное падение при старте (fail-fast) |
-| `ALLOWED_GROUP_IDS` | да* | пусто | ID разрешённых групп через запятую/пробел (супергруппы — отрицательные, `-100...`). Бот покидает все прочие чаты |
-| `ALLOWED_GROUP_ID` | нет | пусто | Устаревший вариант в единственном числе; объединяется с `ALLOWED_GROUP_IDS` |
-| `ALLOW_OPEN_MODE` | да* | `false` | `true` — бот работает в любой группе. *Пустой allow-list при `ALLOW_OPEN_MODE != true` → бот отказывается стартовать (secure-by-default) |
-| `DISABLED_THREADS` | нет | пусто | Denylist топиков: `group:thread`; для General — `group:general` (также `gen`/`none`) |
-| `PORT` | нет | `8000` | Порт HTTP-сервера (health/keepalive) |
-| `LOG_LEVEL` | нет | `INFO` | `DEBUG` / `INFO` / `WARNING` |
-| `CHROMIUM_SANDBOX` | нет | пусто (off) | `on` — включает sandbox Chromium (нужны user namespaces/seccomp; на Render Free недоступно) |
-| `JITLESS` | нет | пусто (off) | `on` — отключает V8 JIT (`--js-flags=--jitless`): сильно режет RCE-поверхность, но замедляет тяжёлые JS-страницы |
-
-## Установка
-
-### Docker
-
-````bash
-docker build -t safeshot-bot .
-docker run -d \
-  -e BOT_TOKEN=123456:ABC... \
-  -e ALLOWED_GROUP_IDS=-1001234567890 \
-  -p 8000:8000 \
-  --name safeshot-bot \
-  safeshot-bot
-````
-
-### Docker Compose (рекомендуется локально и на VPS)
-
-````bash
-cp .env.example .env
-# заполните BOT_TOKEN и ALLOWED_GROUP_IDS в .env
-docker compose up -d --build
-docker compose logs -f bot
-````
-
-Compose включает усиленную изоляцию: `read_only` rootfs + tmpfs, `cap_drop: ALL`, `no-new-privileges`, non-root `pwuser`, `mem_limit: 512m`, `pids_limit: 256`, `restart: unless-stopped`.
-
-### Локальный запуск без Docker
-
-````bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium --with-deps   # вне официального образа браузер нужно ставить
-cp .env.example .env                       # заполнить значения
-export $(grep -v '^#' .env | xargs)
-python main.py
-````
-
-Тесты:
-
-````bash
-pip install pytest
-pytest -q
-````
-
-## Конфигурация
-
-Помимо ENV, ключевые лимиты заданы константами в коде (`config.py`, `screenshot.py`):
-
-| Константа | Значение | Смысл |
-|---|---|---|
-| `SEMAPHORE` | 1 | Один скриншот одновременно (два Chromium = OOM на 512 MB) |
-| `MAX_QUEUE_SIZE` | 10 | Глубина очереди |
-| `MAX_INFLIGHT_PER_CHAT` | 2 | Квота задач на чат (один чат не забивает очередь) |
-| `RAM_LIMIT_MB` | 430 | Watchdog: выше — новые задачи отклоняются |
-| `TASK_TIMEOUT_SEC` | 90 | Глобальный таймаут задачи |
-| `TIMEOUT_MS` / `PAUSE_MS` | 20000 / 3000 | Навигация / ожидание JS-рендера |
-| `RATE_LIMIT_SEC` | 5 | Пейсинг разных ссылок от одного пользователя |
-| `MAX_URL_LEN` | 2048 | Более длинные URL игнорируются |
-| `MAX_BODY_BYTES` | 2 000 000 | Лимит тела httpx-ответа (анти gzip-bomb) |
-| `CACHE_SIZE` | 200 | Максимум записей кэша |
-| `RESTART_EVERY` | 50 | Перезапуск браузера каждые N скриншотов |
-| `PART_HEIGHT` / `MAX_PARTS` | 1280 / 4 | Нарезка и потолок высоты скриншота |
-| `DUP_WINDOW_SEC` / `BAN_SEC` | 120 / 300 | Окно дубликатов / длительность mute |
-
-## Безопасность
-
-### SSRF
-
-`security.is_safe()` — единственный барьер между недоверенным URL и исходящим запросом. Проверки:
-
-- Схема только `http`/`https`; порты только 80/443 (запросы на `:6379`, `:9200`, `:2375` и т.п. блокируются даже для публичных хостов).
-- Блок `localhost` и внутренних DNS-суффиксов: `.internal`, `.local`, `.localhost`, `.cluster.local`, `.svc`, `.consul`; нормализация trailing dot (`evil.com.`).
-- Резолв **всех** A+AAAA адресов домена — каждый обязан быть публичным (защита от dual-stack-трюков).
-- Нормализация IPv4-mapped IPv6 (`::ffff:127.0.0.1` → `127.0.0.1`).
-- `is_global`-проверка плюс явный блок-лист: loopback, RFC1918, link-local (включая cloud IMDS `169.254.169.254`), CGNAT `100.64.0.0/10`, NAT64 `64:ff9b::/96`, multicast, reserved, `0.0.0.0/8` и др.
-- Любая ошибка парсинга/резолва → `False` (fail-closed).
-
-Фильтр вызывается трижды: в `bot.py` до постановки в очередь, в `screenshot.shoot` непосредственно перед навигацией (сужение окна DNS-rebinding) и в route handler **на каждый** сетевой запрос Chromium — subresource, iframe, fetch, редирект. В `metadata.fetch` финальный URL после редиректов проверяется до чтения тела ответа.
-
-### Изоляция браузера
-
-- Новый browser context на каждый запрос; `service_workers="block"`, `accept_downloads=False`, `ignore_https_errors=False`.
-- Запуск с отключённой фоновой сетью и телеметрией (`--disable-background-networking`, `--disable-component-update`, `--disable-domain-reliability`, `--disable-breakpad` и др.), WebRTC отключён (утечка локального IP), `AsyncDns` отключён (резолвер Chromium = системный = тот же, что в `is_safe`).
-- `CHROMIUM_SANDBOX` по умолчанию выключен (`--no-sandbox`): на Render Free user namespaces недоступны. Компенсация: контейнер работает от непривилегированного `pwuser` (побег из рендера ≠ root), свежий Chromium из официального образа, в compose — `cap_drop: ALL`, `read_only`, `no-new-privileges`, `pids_limit`. На VPS с seccomp-профилем включайте `CHROMIUM_SANDBOX=on` для настоящей изоляции.
-- Опциональный `JITLESS=on` отключает V8 JIT — максимальное сокращение RCE-поверхности ценой скорости на тяжёлых JS-страницах.
-
-### Конфигурация и секреты
-
-- Пустой `ALLOWED_GROUP_IDS` без явного `ALLOW_OPEN_MODE=true` → отказ старта: забытая переменная не превращает бота в открытый прокси для SSRF/DoS.
-- `BOT_TOKEN` — только из окружения; в render.yaml `sync: false` (не в git); `.env` исключён в `.gitignore` и `.dockerignore`.
-- Логирование без `backtrace`/`diagnose`; исключения пишутся как имя класса, без сырых URL (могут содержать токены/PII).
-- `/health` отдаёт только статус и булевы флаги — внутренние счётчики очереди/кэша наружу не раскрываются.
-
-### Анти-DoS
-
-Очередь с лимитом глубины, per-chat квота, RAM-watchdog, rate-limit, лимит длины URL и тела ответа, негативный кэш ошибок, ограничение высоты захвата на уровне браузера. Все состояния анти-спама — bounded `TTLCache` (память не растёт); активные mute хранит сам Telegram (`until_date`).
-
-### Известные ограничения модели угроз
-
-- Промежуточные редиректы httpx не валидируются (проверяется только финальный URL) — возможен blind-запрос к внутреннему хосту через цепочку 302.
-- Окно DNS-rebinding между проверкой и резолвом Chromium сужено двойной проверкой и AsyncDns off, но не закрыто полностью (нет пиннинга IP).
-- `--no-sandbox` в дефолтном режиме — см. компенсации выше.
-
-## Производительность
-
-- Один скриншот одновременно; типичная задача ≈ 23–30 с (навигация 20 с + пауза 3 с + захват). Очередь 10 задач задаёт worst-case ожидание.
-- Память контролируется по всей цепочке: высота захвата ограничена на уровне браузера (не `full_page` — полный рендер листингов в один битмап вызывает OOM), `--disable-dev-shm-usage`, `--disable-gpu`/`--disable-3d-apis`, блок media/websocket/fonts и рекламных хостов, стрим httpx с лимитом 2 MB.
-- Плановый перезапуск браузера каждые 50 запросов сбрасывает рост V8-heap и внутреннего кэша страниц.
-- Изображения и CSS не блокируются — превью визуальное по концепции.
-
-## Кэширование
-
-In-memory `TTLCache` (200 записей). Хранится Telegram `file_id` и метаданные — байты изображений не хранятся ни в RAM, ни на диске. Ключ — `sha256` канонизированного URL (lowercase схемы/хоста, без fragment; query сохраняется — в товарных URL он значим).
-
-| Тип записи | TTL | Логика |
-|---|---|---|
-| Фото / media group | 3600 с | Стандартное превью |
-| Запись с ценой/рейтингом | 900 с | Цена устаревает быстрее |
-| Только текст (без скриншота) | 300 с | Сайту даётся шанс «разблокироваться» |
-| Failure (негативный кэш) | 180 с | Повторные запросы битого URL не доходят до браузера |
-
-## Очередь задач
-
-`asyncio.Queue` + один воркер (соответствует `SEMAPHORE=1`). При постановке: дедуп по ключу `(chat, thread, url)` (повторный запрос подключается к уже идущей задаче), RAM-watchdog, per-chat квота, проверка глубины. Каждая задача — `Future` с глобальным таймаутом 90 с; таймаут возвращает пустой результат (текстовый фолбэк), исключение пробрасывается в обработчик и кэшируется как failure. Очистка in-flight-структур — в `finally`. Переполнение → исключение `QueueFull` → пользователю честный ответ «бот перегружен». Состояние очереди — только в памяти процесса; при рестарте незавершённые задачи теряются (сообщения остаются без ответа).
-
-## Мониторинг и диагностика
-
-| Endpoint | Назначение |
+| File | Role |
 |---|---|
-| `GET/HEAD /` , `GET/HEAD /ping` | Keepalive / liveness; всегда `{"ok": true}` |
-| `GET /health` | `200 {"status":"ok",...}` если браузер инициализирован и `get_me()` отвечает за 5 с; иначе `503 degraded`. Отдаёт только булевы флаги `browser`/`bot` |
+| `main.py` | FastAPI (`/`, `/ping`, `/health`) + aiogram polling, graceful shutdown, logging |
+| `bot.py` | Telegram handlers: group allow-list, topic denylist, trusted-domain whitelist, admin bypass, duplicate-spam escalation (up to a 5-min mute), rate limiting, cache, queue, single-message flow, card building, placeholder generation |
+| `screenshot.py` | Playwright + Pillow: hardened Chromium launch flags, per-request SSRF filtering in a route handler, heavy-content blocking (media/ws/fonts/ads), capture-height clamp, slicing, periodic browser restart + crash self-recovery |
+| `metadata.py` | httpx metadata fetch with body-size limit and manual redirect walking (SSRF check on every hop) |
+| `security.py` | `is_safe()` SSRF filter — resolves all A/AAAA records, blocks private/loopback/link-local/metadata ranges, ports other than 80/443 |
+| `queue_manager.py` | Bounded queue: depth + per-chat quota + RAM watchdog + dedup + timeout; supervised worker |
+| `cache.py` | In-RAM cache (Telegram `file_id` + metadata), sha256 keys, per-kind TTL, negative cache |
+| `config.py` | Env-based config, fail-closed defaults, resource limits |
+| `placeholder.png` | Optional custom placeholder (see Customization) |
 
-Логи — loguru в stderr, уровень из `LOG_LEVEL`. Логируются: путь запроса (кэш-хиты с возрастом, позиция в очереди, причины отказов), RAM-метки до/после скриншота и при рестарте браузера, события модерации, статистика нарезки. Docker `HEALTHCHECK` опрашивает `/ping` (интервал 30 с, start-period 60 с); обратите внимание — в нём захардкожен порт 8000.
+## Configuration (environment variables)
 
-## Развёртывание на Render
+| Variable | Required | Meaning |
+|---|---|---|
+| `BOT_TOKEN` | yes | Telegram bot token (fail-fast if missing) |
+| `ALLOWED_GROUP_IDS` | yes* | Space/comma-separated group IDs. The bot leaves any other chat. *Empty list without `ALLOW_OPEN_MODE=true` aborts startup (secure by default) |
+| `ALLOW_OPEN_MODE` | no | `true` to deliberately run without a group allow-list |
+| `DISABLED_THREADS` | no | Topic denylist: `group:thread` pairs, `group:general` for the General topic |
+| `TRUSTED_DOMAINS` | no | Whitelist, comma/space separated. Unset → default `youtube.com youtu.be wikipedia.org github.com`; set empty → whitelist disabled. Deliberately excludes `google.com` (Forms/Drive phishing), `t.me` (scam channels), social networks and marketplaces |
+| `CHROMIUM_SANDBOX` | no | `on` to enable the real Chromium sandbox (needs userns/seccomp — works locally/VPS, not on Render Free) |
+| `JITLESS` | no | `on` disables the V8 JIT (smaller RCE surface, slower heavy pages) |
+| `LOG_LEVEL` | no | Default `INFO` |
+| `PORT` | no | Default `8000` |
 
-1. Форкните/запушьте репозиторий с `render.yaml` в корне.
-2. В Render: **New + → Blueprint** → выберите репозиторий. Сервис создастся из blueprint (`type: web`, `runtime: docker`, `plan: free`, `healthCheckPath: /ping`, `autoDeploy: true`).
-3. В Dashboard задайте секреты (`sync: false` в blueprint): `BOT_TOKEN`, `ALLOWED_GROUP_IDS`, при необходимости `DISABLED_THREADS`.
-4. **Обязательно для Free-плана:** сервис засыпает без входящего HTTP-трафика, а long-polling — это исходящие запросы и сам сервис не удерживает. Настройте внешний пингер (UptimeRobot, cron-job.org) на `https://<service>.onrender.com/ping` каждые ~10 минут.
-5. `CHROMIUM_SANDBOX` на Render Free оставляйте пустым — user namespaces недоступны.
+Key tunables live as constants in `config.py` / `screenshot.py` (queue depth, per-chat quota, RAM threshold, timeouts, capture clamp, `TRUSTED_REACTION` emoji, etc.) — each is commented with the reason for its value.
 
-## Развёртывание на VPS
+## Security model
 
-1. Установите Docker + Docker Compose.
-2. ```bash
-   git clone <repo> && cd safeshot-bot
-   cp .env.example .env   # заполните BOT_TOKEN, ALLOWED_GROUP_IDS
-   docker compose up -d --build
-````
-3. Для настоящей изоляции Chromium: установите `CHROMIUM_SANDBOX=on` в `.env`, скачайте официальный seccomp-профиль Playwright и раскомментируйте строку `seccomp=./seccomp_profile.json` в `security_opt` compose-файла.
-4. Проверка: `curl http://localhost:8000/health` → `{"status":"ok",...}`.
-5. Автозапуск обеспечивает `restart: unless-stopped`; обновление: `git pull && docker compose up -d --build`.
+- **SSRF / DNS rebinding / cloud metadata:** `is_safe()` is enforced at four layers — before enqueue, again before `goto`, on **every** Chromium request (route handler), and on **every** httpx redirect hop (manual redirect walking, no blind `follow_redirects`).
+- **Container hardening:** fresh Chromium (Playwright pinned to the image version), non-root `pwuser`, background networking/telemetry disabled, WebRTC off, service workers blocked, downloads off.
+- **DoS/OOM protection:** bounded queue with per-chat quota, RAM watchdog, single-screenshot semaphore, capture-height clamp at the browser level, response-body limit, differentiated cache TTLs, periodic browser restart.
+- **Secure by default:** fail-closed group allow-list, secrets only via env, `/health` exposes booleans only.
+
+Known limitations (honest list): `--no-sandbox` is unavoidable on Render Free (compensated by non-root); no egress filtering on Free (SSRF defense is app-level; full defense needs a VPS + nftables); a narrowed-but-open DNS-rebinding window remains without pin-to-IP; the free instance sleeps without external inbound HTTP — use an external pinger on `/ping` (~10 min interval).
+
+## Customization
+
+- **Placeholder image:** drop a `placeholder.png` (vertical, **780×1280** — the exact size of the first screenshot frame, so the message doesn't change shape when the image is swapped) into the repo root and push. Without it the bot generates a warning image at startup.
+- **Whitelist reaction:** `TRUSTED_REACTION` constant in `bot.py` (must be from the Bot API reaction set).
+- **Alert texts:** caption/disclaimer constants at the top of `bot.py`.
+
+## Deploy
+
+**Render (Blueprint):** `render.yaml` ships a free-plan web/docker service with `healthCheckPath: /ping` and `sync: false` secrets. Push to GitHub → connect the repo → set env vars. Free plan has no Shell; restart via an empty commit (`git commit --allow-empty -m "restart" && git push`) or Suspend/Resume. Add an external pinger (UptimeRobot / cron-job.org) hitting `/ping` to prevent sleep.
+
+**Local:** `docker-compose.yml` runs with stronger isolation than Render Free allows (cap_drop ALL, read-only rootfs, memory/pids limits, optional real sandbox via `CHROMIUM_SANDBOX=on` + Playwright's seccomp profile).
+
+The Docker image is `mcr.microsoft.com/playwright/python:v1.60.0-noble` — the pip `playwright` version in `requirements.txt` must match the image tag; browsers are preinstalled, no `playwright install` needed.
+
+## Health
+
+`GET /health` → `{"status":"ok","browser":true,"bot":true,"worker":true}` — browser connectivity, Telegram `getMe` (cached 20 s), and queue-worker liveness.
 
 ## Troubleshooting
 
-| Проблема | Причина | Решение |
-|---|---|---|
-| Бот падает на старте: `KeyError: 'BOT_TOKEN'` | Не задан токен | Установить `BOT_TOKEN` |
-| Падение: `ALLOWED_GROUP_IDS не задано и ALLOW_OPEN_MODE!=true` | Secure-by-default отказ | Указать ID групп либо осознанно `ALLOW_OPEN_MODE=true` |
-| Chromium не найден / `Executable doesn't exist` | Версия pip `playwright` ≠ тег образа | Держать `playwright==1.60.0` ↔ `v1.60.0-noble` синхронно |
-| Бот молчит в группе | Группа не в `ALLOWED_GROUP_IDS`, топик в `DISABLED_THREADS`, отправитель — админ, либо сообщение старше 60 с | Проверить ID (супергруппы отрицательные `-100...`), denylist, статус отправителя |
-| Бот сам выходит из группы | Группа не в allow-list — штатное поведение | Добавить ID группы |
-| «Бот перевантажений (черга заповнена)» | Очередь 10 / квота 2 на чат / RAM > 430 MB | Подождать; смотреть логи `QUEUE reject` |
-| «Посилання веде на недоступний ресурс» | URL не прошёл SSRF-фильтр (приватный IP, нестандартный порт, внутренний суффикс, не http/https) | Штатное поведение фильтра |
-| Сервис на Render Free засыпает | Нет входящего HTTP-трафика | Внешний пингер на `/ping` каждые ~10 мин |
-| Docker healthcheck failing при нестандартном порте | В `HEALTHCHECK` захардкожен `:8000` | Использовать `PORT=8000` либо править Dockerfile |
-| Crash Chromium про `/dev/shm` локально | Маленький `/dev/shm` | Compose уже использует `ipc: host`; флаг `--disable-dev-shm-usage` выставлен |
-| Скриншот пустой/таймаут на тяжёлом сайте | JS не успел / анти-бот | Сработает текстовый фолбэк с httpx-метаданными; при `JITLESS=on` таймауты чаще |
+- **`TelegramConflictError` after redeploy** — old and new instances poll for a few seconds; resolves itself. If it lasts >1–2 min, force-restart with an empty commit.
+- **No 👌 reaction on trusted links** — the emoji is not allowed in the group's reaction settings; the bot logs `react skipped` and continues.
+- **`Screenshot failed: TimeoutError` → text fallback** — heavy/anti-bot site (e.g. OLX); expected behavior, not a regression.
+- **Page shows "Just a moment…"** — Cloudflare challenge got screenshotted; an anti-bot limit.
+- **Endless `GET /ping 200` in logs** — Render's internal health check; it does not keep the free instance awake.
 
-## Ограничения проекта
+## Roadmap (growth track, deliberately not done on a single free instance)
 
-- Один экземпляр: long-polling + всё состояние (кэш, очередь, rate-limit, страйки) в памяти процесса. Горизонтальное масштабирование без переработки невозможно; рестарт теряет кэш и очередь.
-- Один рендер одновременно; пропускная способность ограничена бюджетом 512 MB.
-- Обрабатывается только **первая** ссылка из сообщения.
-- Высота превью ограничена 4 частями × 1280 px; более длинные страницы обрезаются.
-- Тексты сообщений захардкожены (украинский), i18n нет.
-- Скриншот может не получиться на сайтах с агрессивной анти-бот-защитой — отрабатывает текстовый фолбэк.
-- Тестовое покрытие — только `security.py`; CI-пайплайна в репозитории нет.
-- Промежуточные редиректы httpx не проверяются SSRF-фильтром (только финальный URL).
+Pin-to-IP for full DNS-rebinding closure, egress filtering (VPS/nftables), Redis-backed cache + stateless replicas, queue start guards, CI for the SSRF test suite, `/metrics`.
 
-## Roadmap
+## Tests
 
-Направления, естественно вытекающие из текущей архитектуры:
-
-- Неблокирующий DNS-резолв в `security.is_safe` (сейчас `socket.getaddrinfo` блокирует event loop) + кэш/пиннинг резолвленных IP против DNS-rebinding.
-- Валидация каждого hop редиректов в `metadata.fetch`.
-- Супервизор воркера очереди и его статус в `/health`.
-- Тесты для `queue_manager`, `cache` и парсера метаданных; CI (pytest, lint, скан образа, проверка синхронности версии Playwright).
-- Webhook вместо long-polling + Redis для кэша/очереди → возможность нескольких реплик.
-- Prometheus-метрики (глубина очереди, hit-rate кэша, длительность рендера, RAM) на внутреннем порту.
-- Замена фиксированной паузы 3 с на `networkidle` с фолбэком; динамическая ETA в сообщении о позиции в очереди.
-- Локализация текстов.
-
-## Лицензия
-
-Файл лицензии в репозитории **отсутствует**. До добавления `LICENSE` использование, копирование и распространение кода регулируются режимом «all rights reserved» по умолчанию.
-````
-
-Замечание вне README: `ipc: host` в текущем `docker-compose.yml` я в README описал как есть (factual), но рекомендую заменить на `shm_size: 1g` до публикации — это единственное место, где документация хорошей практики и фактический код расходятся.
+`tests/test_security.py` — smoke tests for the SSRF filter (private ranges, metadata IPs, ports, IPv6-mapped tricks).
