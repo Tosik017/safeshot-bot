@@ -36,6 +36,8 @@ MAX_HEIGHT = PART_HEIGHT * MAX_PARTS
 # 2560 CSS px змушувало Chromium растеризувати ВСЮ сторінку (5120 фіз.px) —
 # на важких сторінках це >512MB. 640 CSS px × DSF 2 = 1280 фіз.px = 1 кадр
 # = точний розмір заглушки 780×1280 (повідомлення не «стрибає»).
+# Можна підняти до 844 (повний екран viewport) майже безкоштовно — все ≤844
+# вже відрендерено; але тоді результат стане вищим за заглушку (стрибок).
 CAPTURE_CSS = PART_HEIGHT // DEVICE_SCALE  # 640 CSS px — перший екран
 
 # Мінімальний stealth без зовнішньої залежності (фрагментний playwright-stealth
@@ -122,8 +124,18 @@ def _launch_args() -> list[str]:
 
 
 def log_ram(label: str):
-    mb = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
-    logger.info(f"[RAM | {label}] {mb:.1f} MB")
+    """python + ВСІ child-процеси (Chromium): Render рахує весь cgroup, тож
+    лише власний RSS давав хибне відчуття запасу (167MB перед OOM-кіллом)."""
+    p = psutil.Process(os.getpid())
+    own = p.memory_info().rss
+    child = 0
+    for c in p.children(recursive=True):
+        try:
+            child += c.memory_info().rss
+        except psutil.Error:
+            continue
+    own_mb, child_mb = own / 1048576, child / 1048576
+    logger.info(f"[RAM | {label}] python={own_mb:.1f} + chromium={child_mb:.1f} = {own_mb + child_mb:.1f} MB")
 
 
 async def init():
