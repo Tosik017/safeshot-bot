@@ -63,10 +63,42 @@ DISABLED_THREADS, DISABLED_GENERAL_CHATS = _parse_disabled_threads(
     os.environ.get("DISABLED_THREADS", "")
 )
 
+# --- Довірені домени (whitelist) ---
+# Бот НЕ обробляє посилання на ці домени — лише тиха реакція 👌 (емодзі в bot.py).
+# Матчинг: точний hostname або субдомен по межі крапки ("m.youtube.com" → так,
+# "youtube.com.evil.top" → ні). Налаштування: env TRUSTED_DOMAINS, через кому/пробіл.
+# env НЕ задано → дефолтний список нижче; задано порожнім → whitelist ВИМКНЕНО.
+# Свідомо НЕ включаємо google.com (Google Forms/Drive — живий фішинг-вектор),
+# t.me (скам-канали/боти) та соцмережі/маркетплейси (скам-магазини).
+_DEFAULT_TRUSTED = "youtube.com youtu.be wikipedia.org github.com"
+
+
+def _parse_trusted_domains(raw: str) -> frozenset[str]:
+    domains: set[str] = set()
+    for token in (raw or "").replace(",", " ").split():
+        d = token.strip().lower().lstrip(".")
+        if d.startswith("www."):
+            d = d[4:]
+        if "." in d:
+            domains.add(d)
+        else:
+            print(f"[config] WARN: пропускаю некоректний trusted domain: {token!r}")
+    return frozenset(domains)
+
+
+TRUSTED_DOMAINS = _parse_trusted_domains(
+    os.environ.get("TRUSTED_DOMAINS", _DEFAULT_TRUSTED)
+)
+
 # --- Playwright / рендер ---
+# МОБІЛЬНИЙ UA (Chrome Android): viewport у screenshot.py давно мобільний
+# (390×844), але з десктопним UA сайти з UA-сніфінгом віддавали десктопну
+# верстку, втиснуту в 390px. Тепер UA узгоджений із viewport + is_mobile +
+# has_touch → сайти віддають справжню мобільну версію. Версія Chrome/140
+# збігається з рушієм образу Playwright.
 USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36"
 )
 TIMEOUT_MS = 20_000        # goto: баланс швидкість/надійність
 PAUSE_MS = 3_000           # чекаємо JS-рендер ціни після domcontentloaded

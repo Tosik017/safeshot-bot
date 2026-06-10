@@ -1,6 +1,8 @@
-import re, time, asyncio
+import os, re, time, asyncio
 from datetime import datetime, timezone
 from io import BytesIO
+from urllib.parse import urlsplit
+
 from aiogram import Router, Bot
 from aiogram.types import (
     Message, BufferedInputFile, MessageEntity, InputMediaPhoto,
@@ -8,9 +10,11 @@ from aiogram.types import (
 )
 from cachetools import TTLCache
 from loguru import logger
+from PIL import Image, ImageDraw, ImageFont
+
 from config import (
     ALLOWED_GROUP_IDS, DISABLED_THREADS, DISABLED_GENERAL_CHATS,
-    RATE_LIMIT_SEC, MAX_URL_LEN,
+    RATE_LIMIT_SEC, MAX_URL_LEN, TRUSTED_DOMAINS,
 )
 import cache, security, screenshot, metadata, queue_manager
 
@@ -22,6 +26,10 @@ router = Router()
 URL_RE = re.compile(r'https?://[^\s]+')
 
 MAX_MSG_AGE = 60
+
+# 👌 а не ✅: Bot API дозволяє реакції лише з фіксованого набору, ✅ туди НЕ входить
+# (REACTION_INVALID). Якщо в групі обмежено набір реакцій — дозвольте 👌 у налаштуваннях.
+TRUSTED_REACTION = "👌"
 
 # --- Анти-спам дублікатами: ескалація + реальний mute ---
 # ПАМ'ЯТЬ: нічого на диск, усе в bounded TTLCache (maxsize + ttl → не росте).
@@ -48,6 +56,23 @@ def _rate_cooldown(user_id: int) -> int:
             return int(remaining) + 1
     _rate_store[user_id] = time.monotonic()
     return 0
+
+# --- Whitelist довірених доменів ---
+def _trusted_domain(url: str) -> str | None:
+    """Збіглий довірений домен або None. Суфікс-матч ПО МЕЖІ КРАПКИ:
+    'm.youtube.com' → так, 'youtube.com.evil.top' → ні. urlsplit().hostname
+    знімає userinfo-трюк (https://youtube.com@evil.com → evil.com) і порт.
+    IDN-гомогліфи (youtubе.com з кирилицею) лишаються punycode → не збігаються."""
+    try:
+        host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return None
+    if not host:
+        return None
+    for d in TRUSTED_DOMAINS:
+        if host == d or host.endswith("." + d):
+            return d
+    return None
 
 # --- Модераторські примітиви (мʼяко падають, якщо прав/умов немає) ---
 async def _react(bot: Bot, msg: Message, emoji: str):
@@ -170,42 +195,94 @@ async def on_my_chat_member(event: ChatMemberUpdated, bot: Bot):
         except Exception as e:
             logger.error(f"leave_chat failed chat={chat.id}: {e}")
 
-# --- Повідомлення ---
-WARNING_INSTANT = (
-    "\n"
-    "🚨⚠️ СТОП! НЕ ПЕРЕХОДЬТЕ ЗА ПОСИЛАННЯМ! ⚠️🚨\n"
-    "━━━━━━━━━━━━━━━━━━\n"
-    "🛡 Готую безпечний перегляд сторінки.\n"
-    "⏳ Зазвичай до 1–2 хвилин — не переходьте, дочекайтесь результату нижче. 👇"
+# --- Фото-заглушка (single-message flow) ---
+# Telegram НЕ дозволяє відредагувати текстове повідомлення у фото. Тому статус
+# одразу йде ФОТО-заглушкою з caption-попередженням, а результат приходить через
+# editMessageMedia/editMessageCaption у ТЕ САМЕ повідомлення. Одне повідомлення
+# на посилання — нічого не видаляємо, нічого не плодимо.
+# МОБІЛЬНИЙ ФОРМАТ: 780×1280 = точний розмір першого кадра скриншота
+# (MOBILE_WIDTH 390 × DEVICE_SCALE 2 на PART_HEIGHT 1280) → editMessageMedia
+# не змінює форму повідомлення, картинка не «стрибає».
+PLACEHOLDER_FILE = "placeholder.png"   # свій логотип групи (вертикальний 780×1280) — бот візьме його
+_PLACEHOLDER_W, _PLACEHOLDER_H = 780, 1280
+
+_placeholder_png: bytes | None = None
+_placeholder_fid: str | None = None    # file_id після першого аплоада → далі без байтів
+
+
+def _font(size: int):
+    try:
+        # DejaVu гарантовано є в образі playwright/python:noble (залежності Chromium).
+        return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _build_placeholder() -> bytes:
+    if os.path.exists(PLACEHOLDER_FILE):
+        with open(PLACEHOLDER_FILE, "rb") as f:
+            return f.read()
+    img = Image.new("RGB", (_PLACEHOLDER_W, _PLACEHOLDER_H), (15, 23, 42))
+    d = ImageDraw.Draw(img)
+    amber = (245, 158, 11)
+
+    def center(y: int, s: str, font, fill):
+        x = (_PLACEHOLDER_W - d.textbbox((0, 0), s, font=font)[2]) // 2
+        d.text((x, y), s, font=font, fill=fill)
+
+    # Попереджувальний трикутник зі знаком оклику (вертикальна композиція)
+    d.polygon([(390, 180), (260, 430), (520, 430)], fill=amber)
+    center(265, "!", _font(130), (15, 23, 42))
+
+    center(560, "SafeShot", _font(86), (255, 255, 255))
+    center(720, "ГОТУЮ БЕЗПЕЧНИЙ", _font(52), (203, 213, 225))
+    center(790, "ПЕРЕГЛЯД…", _font(52), (203, 213, 225))
+    center(930, "НЕ ПЕРЕХОДЬТЕ", _font(46), amber)
+    center(995, "ЗА ПОСИЛАННЯМ", _font(46), amber)
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _placeholder_media():
+    """file_id (якщо вже аплоадили) або байти для першого аплоада."""
+    global _placeholder_png
+    if _placeholder_fid:
+        return _placeholder_fid
+    if _placeholder_png is None:
+        _placeholder_png = _build_placeholder()
+    return BufferedInputFile(_placeholder_png, filename="safeshot.png")
+
+
+def _remember_placeholder(sent: Message):
+    global _placeholder_fid
+    if not _placeholder_fid and sent and sent.photo:
+        _placeholder_fid = sent.photo[-1].file_id
+
+# --- Тексти (лаконічні, цитатою, з іконками) ---
+# Статичний текст без вводу юзера → parse_mode=HTML безпечний.
+def _warning_caption(position: int) -> str:
+    queue_line = f"\n📊 Черга: {position} (~{position * 60} с)" if position > 1 else ""
+    return (
+        "🚨 <b>СТОП! НЕ ПЕРЕХОДЬТЕ ЗА ПОСИЛАННЯМ!</b>\n"
+        "<blockquote>🛡 Готую безпечний перегляд — до 1–2 хв.\n"
+        "⏳ Результат з'явиться прямо в цьому повідомленні. 👇</blockquote>"
+        + queue_line
+    )
+
+
+FAIL_CAPTION = (
+    "❌ <b>Безпечне прев'ю не вдалося.</b>\n"
+    "<blockquote>🚨 Тим більше НЕ переходьте за посиланням!\n"
+    "🔁 Спробуйте пізніше або знайдіть товар через Google.</blockquote>"
 )
 
 DISCLAIMER = (
-    "🚨 УВАГА! Не довіряйте незнайомим посиланням.\n"
-    "⚠️ Ніколи не вводьте паролі та дані картки на невідомих сайтах.\n"
-    "🔎 Безпечніше знайти цей товар через пошук Google."
+    "🚨 Не довіряйте незнайомим посиланням!\n"
+    "🔑 Паролі й дані картки — НІКОЛИ на невідомих сайтах.\n"
+    "✅ Безпечніше: знайдіть цей товар самі через Google."
 )
-
-# Стійкий анти-фішинг банер. Замінює статус «Готую перегляд» (НЕ видаляємо його),
-# лишається над прев'ю. Статичний текст → parse_mode=HTML безпечний (немає вводу юзера).
-ANTIPHISH_NOTICE = (
-    "🛡 <b>БЕЗПЕЧНИЙ ПЕРЕГЛЯД готовий — дивись нижче</b> 👇\n\n"
-    "🚨 <b>НЕ переходь за посиланням, поки не перевірив його.</b>\n"
-    "<blockquote>Ознаки шахрайства:\n"
-    "• домен із підміною (g00gle, olx-ua.com, дивні .top/.xyz)\n"
-    "• просять логін, пароль, дані картки або код із SMS\n"
-    "• тиснуть: «терміново», «оплати зараз», таймер зворотного відліку\n"
-    "• ціна «занадто вигідна», передоплата/завдаток на картку</blockquote>\n"
-    "✅ <b>Безпечно:</b> знайди той самий товар сам через Google або офіційний застосунок.\n"
-    "🔐 Паролі та дані картки не вводь на незнайомому сайті — ніколи."
-)
-
-
-async def _show_notice(status):
-    """Замість видалення статусу робимо його стійким анти-фішинг банером."""
-    try:
-        await status.edit_text(ANTIPHISH_NOTICE, parse_mode="HTML")
-    except Exception as e:
-        logger.info(f"notice edit skipped: {e}")
 
 
 def build_message(meta: dict) -> tuple[str, list[MessageEntity]]:
@@ -241,6 +318,10 @@ def build_message(meta: dict) -> tuple[str, list[MessageEntity]]:
         if len(desc) > 300:
             desc = desc[:300].rsplit(" ", 1)[0] + "…"
         text += f"\n📝 {desc}\n"
+
+    # Сторінка була довшою за один екран → чесно позначаємо (шлемо лише 1-й кадр).
+    if meta.get("_truncated"):
+        text += "\n📄 Показано перший екран сторінки.\n"
 
     text += "\n"
     start = len(text.encode("utf-16-le")) // 2
@@ -279,19 +360,6 @@ def merge_meta(httpx_meta: dict, browser_meta: dict) -> dict:
     result["image"] = httpx_meta.get("image") or browser_meta.get("image")
     return result
 
-def _format_warning(position: int) -> str:
-    if position <= 1:
-        return WARNING_INSTANT
-    eta = position * 60
-    return (
-        "\n"
-        "🚨⚠️ СТОП! НЕ ПЕРЕХОДЬТЕ ЗА ПОСИЛАННЯМ! ⚠️🚨\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        f"🛡 Готую безпечний перегляд сторінки.\n"
-        f"📊 Ваша позиція в черзі: {position}. Орієнтовний час: ~{eta} сек.\n"
-        "⏳ Не переходьте, дочекайтесь результату нижче. 👇"
-    )
-
 def _utf16_len(s: str) -> int:
     """Довжина рядка в UTF-16 одиницях — Telegram рахує offset/length саме так."""
     return len(s.encode("utf-16-le")) // 2
@@ -323,29 +391,31 @@ def _with_sender(msg: Message, text: str, entities: list) -> tuple[str, list]:
     shifted = [e.model_copy(update={"offset": e.offset + shift}) for e in entities]
     return prefix + text, prefix_ents + shifted
 
-async def _send_from_cache(msg: Message, url: str, entry: dict):
-    kind = entry.get("kind")
-    meta = entry.get("meta") or {}
 
+def _build_card(msg: Message, meta: dict) -> tuple[str, list]:
+    """Готова caption-картка: meta → текст+entities → атрибуція → ліміт 1024."""
     if meta and meta.get("title"):
         msg_text, msg_entities = build_message(meta)
     else:
         msg_text, msg_entities = build_disclaimer_only()
     msg_text, msg_entities = _with_sender(msg, msg_text, msg_entities)
-    cap_text, cap_entities = trim_caption(msg_text, msg_entities)
+    return trim_caption(msg_text, msg_entities)
+
+
+async def _send_from_cache(msg: Message, url: str, entry: dict):
+    """Кеш-хіт = одразу ОДНЕ готове повідомлення (без стадії заглушки)."""
+    kind = entry.get("kind")
+    meta = entry.get("meta") or {}
+    cap_text, cap_entities = _build_card(msg, meta)
 
     if kind == "photo":
         await msg.reply_photo(photo=entry["file_id"], caption=cap_text, caption_entities=cap_entities)
-    elif kind == "media_group":
-        media = []
-        for i, fid in enumerate(entry["file_ids"]):
-            if i == 0:
-                media.append(InputMediaPhoto(media=fid, caption=cap_text, caption_entities=cap_entities))
-            else:
-                media.append(InputMediaPhoto(media=fid))
-        await msg.reply_media_group(media=media)
     elif kind == "text":
-        await msg.reply(text=msg_text, entities=msg_entities)
+        sent = await msg.reply_photo(photo=_placeholder_media(), caption=cap_text, caption_entities=cap_entities)
+        _remember_placeholder(sent)
+    else:
+        # media_group лишився тільки в теорії: кеш у RAM, після деплою порожній.
+        logger.warning(f"CACHE unsupported kind={kind} — skip")
 
 def _thread_disabled(chat_id: int, thread_id) -> bool:
     """Цей топік ЦІЄЇ групи в denylist? General = повідомлення без топіка (thread_id is None)."""
@@ -394,6 +464,14 @@ async def handle(msg: Message, bot: Bot):
     chat_id = msg.chat.id
     user_id = msg.from_user.id if msg.from_user else None
 
+    # Whitelist довірених доменів: тиха реакція, нуль повідомлень у стрічці.
+    # ДО dup/rate-limit: довірені посилання не палять ліміти й не ведуть до mute.
+    trusted = _trusted_domain(url)
+    if trusted:
+        logger.info(f"TRUSTED domain={trusted} chat={chat_id} — react, мовчимо")
+        await _react(bot, msg, TRUSTED_REACTION)
+        return
+
     if user_id is not None:
         # Повтор тієї ж посилання цим юзером → ескалація (видалення + попередження/мьют).
         if (chat_id, user_id, url) in _dup_seen:
@@ -429,8 +507,7 @@ async def handle(msg: Message, bot: Bot):
         kind = entry.get("kind")
         if kind == "failure":
             await msg.reply(
-                f"🚫 Сторінка недоступна.\n"
-                f"Причина: {entry.get('failure_reason', 'unknown')}\n"
+                f"🚫 Сторінка недоступна ({entry.get('failure_reason', 'unknown')}). "
                 f"Спробуйте через декілька хвилин."
             )
             return
@@ -454,7 +531,14 @@ async def handle(msg: Message, bot: Bot):
         await _react(bot, msg, "👀")
         return
 
-    status = await msg.reply(_format_warning(position))
+    # ОДНЕ повідомлення на посилання: фото-заглушка з попередженням, далі
+    # editMessageMedia/Caption перетворює ЇЇ Ж на результат. Нічого не видаляємо.
+    status = await msg.reply_photo(
+        photo=_placeholder_media(),
+        caption=_warning_caption(position),
+        parse_mode="HTML",
+    )
+    _remember_placeholder(status)
     start = time.monotonic()
 
     httpx_task = asyncio.create_task(metadata.fetch(url))
@@ -464,11 +548,10 @@ async def handle(msg: Message, bot: Bot):
     except Exception as e:
         logger.error(f"FAIL url-task error={type(e).__name__}")
         cache.save_failure(url, type(e).__name__)
-        await status.edit_text(
-            "❌ Не вдалось зробити безпечне прев'ю.\n"
-            "🚨 Тим більше не переходь за посиланням — спробуй пізніше "
-            "або знайди товар через Google."
-        )
+        try:
+            await status.edit_caption(caption=FAIL_CAPTION, parse_mode="HTML")
+        except Exception as e2:
+            logger.warning(f"fail-caption edit skipped: {type(e2).__name__}")
         return
 
     httpx_meta = await httpx_task
@@ -478,46 +561,26 @@ async def handle(msg: Message, bot: Bot):
 
     elapsed = time.monotonic() - start
 
-    if meta and meta.get("title"):
-        msg_text, msg_entities = build_message(meta)
-    else:
-        msg_text, msg_entities = build_disclaimer_only()
-    msg_text, msg_entities = _with_sender(msg, msg_text, msg_entities)
+    if parts and len(parts) > 1:
+        # Прапорець їде в meta → кеш-хіти теж покажуть «перший екран» (cache.py не чіпаємо).
+        meta["_truncated"] = True
+
+    cap_text, cap_entities = _build_card(msg, meta)
 
     try:
         if parts:
-            cap_text, cap_entities = trim_caption(msg_text, msg_entities)
-
-            if len(parts) == 1:
-                sent = await msg.reply_photo(
-                    photo=BufferedInputFile(parts[0], filename="preview.png"),
-                    caption=cap_text,
-                    caption_entities=cap_entities,
-                )
-                if sent.photo:
-                    cache.save_photo(url, sent.photo[-1].file_id, meta)
-            else:
-                media = []
-                for i, part in enumerate(parts):
-                    if i == 0:
-                        media.append(InputMediaPhoto(
-                            media=BufferedInputFile(part, filename=f"part_{i+1}.png"),
-                            caption=cap_text,
-                            caption_entities=cap_entities,
-                        ))
-                    else:
-                        media.append(InputMediaPhoto(
-                            media=BufferedInputFile(part, filename=f"part_{i+1}.png"),
-                        ))
-                sent_list = await msg.reply_media_group(media=media)
-                if sent_list:
-                    file_ids = [s.photo[-1].file_id for s in sent_list if s.photo]
-                    if file_ids:
-                        cache.save_media_group(url, file_ids, meta)
-
-            logger.info(f"OK+photo parts={len(parts)} time={elapsed:.1f}s")
+            # Заглушка → перший екран сторінки + картка. Те саме повідомлення.
+            sent = await status.edit_media(media=InputMediaPhoto(
+                media=BufferedInputFile(parts[0], filename="preview.png"),
+                caption=cap_text,
+                caption_entities=cap_entities,
+            ))
+            if isinstance(sent, Message) and sent.photo:
+                cache.save_photo(url, sent.photo[-1].file_id, meta)
+            logger.info(f"OK+photo first_of={len(parts)} time={elapsed:.1f}s")
         else:
-            await msg.reply(text=msg_text, entities=msg_entities)
+            # Текст-фолбек: картинка-попередження лишається, картка йде в caption.
+            await status.edit_caption(caption=cap_text, caption_entities=cap_entities)
             if meta and meta.get("title"):
                 cache.save_text_only(url, meta)
             else:
@@ -527,13 +590,8 @@ async def handle(msg: Message, bot: Bot):
     except Exception as e:
         logger.error(f"FAIL send error={type(e).__name__}")
         cache.save_failure(url, type(e).__name__)
-        await status.edit_text(
-            "❌ Не вдалось зробити безпечне прев'ю.\n"
-            "🚨 Тим більше не переходь за посиланням — спробуй пізніше "
-            "або знайди товар через Google."
-        )
+        try:
+            await status.edit_caption(caption=FAIL_CAPTION, parse_mode="HTML")
+        except Exception as e2:
+            logger.warning(f"fail-caption edit skipped: {type(e2).__name__}")
         return
-
-    # Статус «Готую перегляд» не видаляємо, а лишаємо як стійкий анти-фішинг банер
-    # над прев'ю (максимально броске й корисне нагадування).
-    await _show_notice(status)

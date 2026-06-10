@@ -37,11 +37,12 @@ MAX_CAPTURE_HEIGHT = MAX_HEIGHT // DEVICE_SCALE  # 2560 CSS px
 
 # Мінімальний stealth без зовнішньої залежності (фрагментний playwright-stealth
 # зі застарілим API прибрано). Ховає найочевидніший маркер автоматизації.
+# navigator.plugins НЕ спуфимо: на мобільному Chrome плагінів немає — фейковий
+# список суперечив би мобільному UA і сам ставав маркером бота.
 _STEALTH_JS = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
 window.chrome = window.chrome || {runtime: {}};
 Object.defineProperty(navigator, 'languages', {get: () => ['uk-UA','uk','ru','en']});
-Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
 """
 
 COOKIE_SELECTORS = [
@@ -219,10 +220,15 @@ async def shoot(url: str) -> tuple[list[bytes], dict]:
         if _request_count >= RESTART_EVERY or _browser is None or not _browser.is_connected():
             await _restart_browser()
 
+        # ПОВНА мобільна емуляція: viewport був мобільним давно, але без
+        # is_mobile/has_touch + з десктопним UA сайти з UA-сніфінгом віддавали
+        # десктопну верстку в 390px. Тепер UA (config) + touch + mobile узгоджені.
         ctx = await _browser.new_context(
             viewport={"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT},
             user_agent=USER_AGENT,
             device_scale_factor=DEVICE_SCALE,
+            is_mobile=True,            # мобільний layout/meta-viewport, як на телефоні
+            has_touch=True,            # touch-events: десктоп-UA без touch = маркер бота
             accept_downloads=False,    # не зберігаємо завантаження зі сторінки
             service_workers="block",   # SW міг би слати запити у фоні (до C2)
             ignore_https_errors=False,
