@@ -33,6 +33,22 @@ _worker_task = None
 _processor = None
 
 
+def _total_rss_mb() -> tuple[float, float]:
+    """(python_MB, children_MB). Render рахує ВЕСЬ cgroup → Chromium-діти теж.
+    Раніше watchdog бачив лише python-процес (~170MB) і був сліпий до
+    Chromium — OOM-кілл приходив 'нізвідки'. Дитина могла померти між
+    children() і memory_info() → ловимо psutil.Error поштучно."""
+    p = psutil.Process(os.getpid())
+    own = p.memory_info().rss
+    child = 0
+    for c in p.children(recursive=True):
+        try:
+            child += c.memory_info().rss
+        except psutil.Error:
+            continue
+    return own / 1048576, child / 1048576
+
+
 def register_processor(processor):
     global _processor
     _processor = processor
@@ -46,9 +62,14 @@ async def enqueue(key, url):
         return _inflight[key], 0, True
 
     # RAM-watchdog: біля межі 512MB не беремо нову задачу (анти-OOM).
-    rss_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
-    if rss_mb > RAM_LIMIT_MB:
-        logger.warning(f"QUEUE reject — RAM {rss_mb:.0f}MB > {RAM_LIMIT_MB}MB")
+    # Рахуємо python + ВСІ child-процеси (Chromium) — як рахує Render.
+    own_mb, child_mb = _total_rss_mb()
+    total_mb = own_mb + child_mb
+    if total_mb > RAM_LIMIT_MB:
+        logger.warning(
+            f"QUEUE reject — RAM python={own_mb:.0f} + chromium={child_mb:.0f} "
+            f"= {total_mb:.0f}MB > {RAM_LIMIT_MB}MB"
+        )
         raise QueueFull()
 
     # Per-chat квота: один чат не може зайняти всю чергу (анти-DoS).
