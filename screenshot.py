@@ -24,6 +24,12 @@ _pw = None  # держимо playwright-інстанс, щоб коректно 
 # роздуває V8 heap і internal page cache. ~50 запитів = кілька годин на Render Free.
 _request_count = 0
 RESTART_EVERY = 50
+# Другий тригер — по памʼяті: used > RESTART_AT_MB перед задачею → рестарт
+# браузера ЗАМІСТЬ відмови. Калібровка (логи 2026-06-11): заявка додає на піку
+# +102..115 MB; 360 + 115 + запас < 512 → watchdog (430) до відмов не доходить.
+# Ціна — +5-8 c до одного запиту зрідка. НЕ піднімай RAM_LIMIT "під 512":
+# watchdog міряє ДО задачі, пік приходить ПІСЛЯ.
+RESTART_AT_MB = 360
 
 DEVICE_SCALE = 2  # ретина-якість (фіз. px = логіч. × DEVICE_SCALE)
 MOBILE_WIDTH = 390
@@ -224,10 +230,18 @@ async def shoot(url: str) -> tuple[list[bytes], dict]:
     log_ram("Before screenshot")
     async with semaphore:
         _request_count += 1
-        # Плановий рестарт (скид V8 heap) АБО аварійний — браузер відсутній/відвалився
-        # (напр. OOM-кілл рендерера). Без перевірки is_connected впав би new_context на
-        # кожному запиті аж до RESTART_EVERY → до 50 відмов поспіль. Тут самовідновлення.
-        if _request_count >= RESTART_EVERY or _browser is None or not _browser.is_connected():
+        # Рестарт браузера: плановий (RESTART_EVERY, скид V8 heap), по памʼяті
+        # (RESTART_AT_MB — самоочистка замість відмови watchdog'а) або аварійний —
+        # браузер відсутній/відвалився (напр. OOM-кілл рендерера). Без перевірки
+        # is_connected впав би new_context на кожному запиті аж до RESTART_EVERY
+        # → до 50 відмов поспіль. Тут самовідновлення.
+        used, _src = ram.used_mb()
+        if used > RESTART_AT_MB:
+            logger.info(f"[BROWSER RESTART trigger] used={used:.0f}MB > {RESTART_AT_MB}MB")
+        if (_request_count >= RESTART_EVERY
+                or used > RESTART_AT_MB
+                or _browser is None
+                or not _browser.is_connected()):
             await _restart_browser()
 
         # ПОВНА мобільна емуляція: viewport був мобільним давно, але без
