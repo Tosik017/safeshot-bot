@@ -114,8 +114,8 @@ CHROMIUM_SANDBOX = os.environ.get("CHROMIUM_SANDBOX", "").lower() == "on"
 CACHE_SIZE = 200
 MAX_QUEUE_SIZE = 10            # глибина черги
 TASK_TIMEOUT_SEC = 90         # 20(goto)+3(pause)+20(screenshot)+запас
-MAX_INFLIGHT_PER_CHAT = 2     # один чат не забиває всю чергу (анти-DoS)
-RAM_LIMIT_MB = 430            # відсікаємо нові задачі біля межі 512MB Render Free
+MAX_INFLIGHT_PER_CHAT = 8     # бот живе в ОДНІЙ групі → per-chat квота ≈ уся ємність бота; 2 відбивало другого-третього юзера ("перевантажений")
+RAM_LIMIT_MB = 430            # тепер лише поріг ЛОГУ "accept under pressure"; реальний захист у shoot: RESTART_AT_MB=360 / ABORT_AT_MB=470
 RATE_LIMIT_SEC = 5            # пейсинг різних посилань від одного юзера
 MAX_URL_LEN = 2048            # довші URL не обробляємо (cache/regex hygiene)
 MAX_BODY_BYTES = 2_000_000    # ліміт тіла httpx-відповіді (анти-OOM / gzip-bomb)

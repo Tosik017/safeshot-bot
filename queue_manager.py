@@ -45,15 +45,16 @@ async def enqueue(key, url):
         logger.info("QUEUE dedup — already in-flight")
         return _inflight[key], 0, True
 
-    # RAM-watchdog: біля межі 512MB не беремо нову задачу (анти-OOM).
-    # Метрика = cgroup (те, що бачить OOM-кіллер Render). Сума RSS рахувала
-    # shared-сторінки Chromium по кілька разів і завищувала на ~25-40%
-    # (637MB "за сумою" при живому 512MB-інстансі) → watchdog хибно відбивав
-    # здоровий інстанс. Деталі/фолбеки в ram.py.
+    # RAM-ВІДМОВУ на вході ПРИБРАНО (2026-06-11): черга лише ЧЕКАЄ і памʼяті
+    # не їсть, а захист від OOM тепер УСЕРЕДИНІ screenshot.py — RESTART_AT_MB
+    # (360, рестарт браузера перед задачею) і RAM-guard ABORT_AT_MB (470, рве
+    # сторінку під час рендеру). Відмова тут лише видавала юзеру
+    # "перевантажений" у момент, коли через 5с памʼять уже вільна після
+    # рестарту. Залишаємо ЛОГ для спостереження — якщо "accept under pressure"
+    # зачастить без подальших guard-абортів, повернемо мʼякший поріг.
     used, src = ram.used_mb()
     if used > RAM_LIMIT_MB:
-        logger.warning(f"QUEUE reject — RAM used={used:.0f}MB ({src}) > {RAM_LIMIT_MB}MB")
-        raise QueueFull()
+        logger.info(f"QUEUE accept under pressure — used={used:.0f}MB ({src}) > {RAM_LIMIT_MB}MB (захист у shoot)")
 
     # Per-chat квота: один чат не може зайняти всю чергу (анти-DoS).
     chat_id = key[0]
