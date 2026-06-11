@@ -30,8 +30,21 @@ RESTART_EVERY = 50
 # Ціна — +5-8 c до одного запиту зрідка. НЕ піднімай RAM_LIMIT "під 512":
 # watchdog міряє ДО задачі, пік приходить ПІСЛЯ.
 RESTART_AT_MB = 360
+# RAM-guard УСЕРЕДИНІ задачі: усі зовнішні сторожі міряють МІЖ задачами, а
+# вбиває ОДНА важка сторінка (+250-300MB за рендер). Guard щосекунди дивиться
+# cgroup-used і при перевищенні закриває КОНТЕКСТ сторінки → задача акуратно
+# падає в текст-фолбек, браузер рестартує, інстанс живе. Рвемо сторінку, не
+# процес. 470 = 512 − запас на секундний крок семплінгу і ріст python.
+# (Свідомий перегляд старого рішення "mid-task kill не робимо": воно
+# приймалось ДО OOM-даних 2026-06-11.)
+ABORT_AT_MB = 470
 
-DEVICE_SCALE = 2  # ретина-якість (фіз. px = логіч. × DEVICE_SCALE)
+# DSF 1.5 замість 2: растеризація картинок у подвійному масштабі була головним
+# джерелом RAM-піку ОДНІЄЇ важкої сторінки (+250-300MB, OOM-кілл інстанса на
+# cudy 2026-06-11; OLX пік 481MB). 1.5 зрізає пік ~на третину; кадр 585×960.
+# На телефоні (стрічка ~390 CSS px завширшки) це досі ≥1.5x щільності.
+# Відкат якості = повернути 2 (і подивитись, чи тримає RAM-guard).
+DEVICE_SCALE = 1.5
 MOBILE_WIDTH = 390
 MOBILE_HEIGHT = 844
 PART_HEIGHT = 1280              # висота частини; Telegram ліміт ~10 МБ на фото
@@ -40,11 +53,11 @@ MAX_HEIGHT = PART_HEIGHT * MAX_PARTS
 # OOM-фікс (інстанс убило по памʼяті на OLX після мобільного UA): single-message
 # flow шле ЛИШЕ перший кадр → знімаємо ЛИШЕ його. Розтягування viewport до
 # 2560 CSS px змушувало Chromium растеризувати ВСЮ сторінку (5120 фіз.px) —
-# на важких сторінках це >512MB. 640 CSS px × DSF 2 = 1280 фіз.px = 1 кадр.
+# на важких сторінках це >512MB. Кадр = 640 CSS px × DEVICE_SCALE.
 # (Заглушка тепер компактна 780×320 і з кадром НЕ збігається — повідомлення
 # свідомо росте при успіху.) Підняти до 844 (повний екран viewport) можна
 # майже безкоштовно — все ≤844 вже відрендерено; відкрите UX-рішення.
-CAPTURE_CSS = PART_HEIGHT // DEVICE_SCALE  # 640 CSS px — перший екран
+CAPTURE_CSS = 640  # CSS px — перший екран (кадр = 640 × DEVICE_SCALE фіз. px)
 
 # Мінімальний stealth без зовнішньої залежності (фрагментний playwright-stealth
 # зі застарілим API прибрано). Ховає найочевидніший маркер автоматизації.
@@ -163,6 +176,26 @@ async def _restart_browser():
     log_ram("After restart")
 
 
+async def _ram_guard(ctx, stop: asyncio.Event, state: dict):
+    """Семплінг памʼяті під час рендеру сторінки. Перевищення → close контексту:
+    goto/screenshot всередині shoot падають TargetClosedError → текст-фолбек."""
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=1.0)
+            return  # stop виставлено штатно
+        except asyncio.TimeoutError:
+            pass
+        used, _src = ram.used_mb()
+        if used > ABORT_AT_MB:
+            state["fired"] = used
+            logger.warning(f"[RAM-GUARD] used={used:.0f}MB > {ABORT_AT_MB}MB — closing page context")
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+            return
+
+
 async def _route_handler(route):
     req = route.request
     url = req.url
@@ -257,6 +290,9 @@ async def shoot(url: str) -> tuple[list[bytes], dict]:
             service_workers="block",   # SW міг би слати запити у фоні (до C2)
             ignore_https_errors=False,
         )
+        _guard_stop = asyncio.Event()
+        _guard_state: dict = {}
+        _guard_task = asyncio.create_task(_ram_guard(ctx, _guard_stop, _guard_state))
         try:
             await ctx.add_init_script(_STEALTH_JS)
             page = await ctx.new_page()
@@ -273,7 +309,7 @@ async def shoot(url: str) -> tuple[list[bytes], dict]:
             # OOM-фікс: viewport НЕ розтягуємо (раніше set_viewport_size до 2560
             # CSS px → Chromium растеризував усю сторінку → OOM-кілл інстанса на
             # важких сторінках, OLX після мобільного UA). Знімаємо clip'ом РІВНО
-            # перший екран: 390×640 CSS = 780×1280 фіз.px.
+            # перший екран: 390×640 CSS (фіз. розмір = × DEVICE_SCALE).
             # doc_height рахуємо лише для чесної позначки «Показано перший екран».
             doc_height = await page.evaluate(
                 "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, "
@@ -297,11 +333,22 @@ async def shoot(url: str) -> tuple[list[bytes], dict]:
             return parts, browser_meta
 
         except Exception as e:
-            logger.warning(f"Screenshot failed: {type(e).__name__}")
+            if _guard_state.get("fired"):
+                # Сторінку розірвав guard → памʼять Chromium може лишитись
+                # роздутою: рестартуємо браузер одразу (семафор уже наш).
+                logger.warning(f"Screenshot ABORTED by RAM-guard at {_guard_state['fired']:.0f}MB")
+                await _restart_browser()
+            else:
+                logger.warning(f"Screenshot failed: {type(e).__name__}")
             return [], {}
 
         finally:
-            await ctx.close()
+            _guard_stop.set()
+            _guard_task.cancel()
+            try:
+                await ctx.close()  # ідемпотентно не гарантовано → ковтаємо
+            except Exception:
+                pass
 
 
 async def _close_cookies(page):
