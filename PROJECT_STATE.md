@@ -1,118 +1,92 @@
 # SafeShot Bot — состояние проекта (handoff / аудит)
-_Снимок на 2026-06-10. Назначение: не потерять нить; точка входа для нового чата._
+_Снимок на 2026-06-11 (вечер). СТАБИЛЬНАЯ ТОЧКА v2 (тег `stable-2026-06-11-v2`). Точка входа для нового чата._
 
-Переносить в новый чат: **HOW_TO_HELP_ME.md + этот PROJECT_STATE.md + project_dump.md**.
+Переносить в новый чат: **HOW_TO_HELP_ME.md + этот PROJECT_STATE.md + project_dump.md (СВЕЖИЙ!)**.
 
 ---
 
 ## 1. Что это
-Telegram-бот безопасного предпросмотра ссылок. По ссылке из группы открывает страницу в изолированном headless-Chromium (Playwright), делает скриншот, режет на части (Pillow), тянет метаданные (httpx + OG/JSON-LD) и постит карточку с анти-фишинг предупреждением — чтобы человек не переходил по ссылке сам.
+Telegram-бот безопасного предпросмотра ссылок. По ссылке из группы открывает страницу в изолированном headless-Chromium (Playwright, полная мобильная эмуляция), снимает **только первый экран** (clip 390×640 CSS; DSF 1.5 → кадр 585×960), тянет метаданные (httpx + OG/JSON-LD) и отвечает **одним сообщением**: компактная заглушка 780×320 → editMessageMedia превращает её в скрин+карточку (успех) или в мини-баннер 780×320 (текст-фолбэк/фейл). Сообщение в ленте РАСТЁТ только под реальный контент. Whitelist доменов — тихая реакция 👌.
 
-- Репозиторий: `github.com/Tosik017/safeshot-bot`
-- Хостинг: Render Free, `https://safeshot-bot.onrender.com`, режим polling, 512 МБ RAM, non-root (`pwuser`).
-- Язык интерфейса бота: украинский. Язык работы со мной: русский, термины — English.
-
----
+- Репозиторий: `github.com/Tosik017/safeshot-bot` · Render Free (512 МБ, polling, non-root), `safeshot-bot.onrender.com`
+- Язык бота: украинский. Язык работы со мной: русский, термины English.
 
 ## 2. Карта файлов
 | Файл | Назначение |
 |---|---|
-| `bot.py` | Хендлеры Telegram: фильтр групп, denylist топиков, извлечение URL, trusted-sender (пропуск админов), анти-спам+mute, rate-limit, кэш, очередь, сборка карточки, анти-фишинг баннер |
-| `security.py` | SSRF-фильтр `is_safe()` — единственный барьер; вызывается на 4 рубежах |
-| `screenshot.py` | Playwright + Pillow: запуск Chromium с hardened/perf-флагами, route-handler (SSRF на каждый запрос + рез тяжёлого контента), clamp высоты, нарезка, рестарт/50, reconnect |
-| `metadata.py` | httpx-метаданные с лимитом размера тела, ручной разбор редиректов с SSRF-проверкой каждого hop |
-| `queue_manager.py` | Очередь: глубина + per-chat квота + RAM-watchdog + дедуп + таймаут; один воркер под супервизором |
-| `cache.py` | RAM-кэш (file_id + meta), sha256-ключ, дифференцированный TTL, негативный кэш |
-| `config.py` | Env-конфиг, fail-closed allow-list групп, лимиты ресурсов |
-| `main.py` | FastAPI (`/`,`/ping`,`/health`) + aiogram polling + graceful shutdown + loguru |
-| `Dockerfile` | `mcr.microsoft.com/playwright/python:v1.60.0-noble`, non-root pwuser, dumb-init |
-| `render.yaml` | Blueprint: web/docker/free, healthCheckPath `/ping`, секреты `sync:false` |
-| `docker-compose.yml` | Локальный запуск с усиленной изоляцией (cap_drop, read_only, лимиты) |
-| `tests/test_security.py` | Smoke-тесты SSRF-фильтра (11 шт.) |
+| `bot.py` | Хендлеры + single-message flow. Реестр медиа `_media()/_remember_media()` (file_id-кэш): placeholder/text/fail. `_fail_banner()`. `_truncated` из `browser_meta` (merge_meta флаги не переносит). Кэш-хит kind=text → мини-баннер |
+| `screenshot.py` | Рендер: clip первого экрана (CAPTURE_CSS=640), **DSF 1.5**, RESTART_EVERY=50, **RESTART_AT_MB=360** (рестарт браузера перед задачей), **RAM-guard ABORT_AT_MB=470** (`_ram_guard`: секундный семплинг, рвёт КОНТЕКСТ страницы → текст-фолбэк → рестарт браузера) |
+| `ram.py` | cgroup-метрика памяти: `used = current − (file − shmem)` — то, что видит OOM-киллер; фолбэки cgroup1 → rss-sum; `rss_breakdown_mb()` для логов |
+| `queue_manager.py` | Очередь: дедуп, per-chat квота, глубина, таймаут. **RAM-reject УБРАН** — на входе только лог `accept under pressure`; защита от OOM целиком в shoot |
+| `config.py` | **MAX_INFLIGHT_PER_CHAT=8** (было 2 — отбивало второго юзера), MAX_QUEUE_SIZE=10, RAM_LIMIT_MB=430 (теперь порог лога), RATE_LIMIT_SEC=5 |
+| `placeholder.png` | 780×320: лого NO ESCAPE слева + укр. предупреждение справа |
+| `banner_text.png` / `banner_fail.png` | мини-баннеры 780×320 (опциональны: bot.py рисует Pillow-фолбэк, если файлов нет) |
+| `security.py`, `metadata.py`, `cache.py`, `main.py`, `Dockerfile` и пр. | без изменений |
+| `README.md` | УСТАРЕЛ (до clip/DSF/баннеров) — кандидат на переписывание |
 
----
+## 3. ЛЕСЕНКА ПОРОГОВ ПАМЯТИ (выстрадано, не трогать без новых данных)
+```
+360 (RESTART_AT_MB)  рестарт браузера ПЕРЕД задачей — самоочистка
+430 (RAM_LIMIT_MB)   теперь только ЛОГ "accept under pressure" на входе в очередь
+470 (ABORT_AT_MB)    guard рвёт ТЕКУЩУЮ страницу во время рендера (не инстанс)
+512 (Render OOM)     сюда доходить не должно
+```
+Калибровка (cgroup2-метрика): покой/старт 200–270; пик одной страницы +100…+300 МБ (cudy раздувал до 482 — guard рвал, OLX до 481/443 — проходил); после рестарта браузера used ~215. **НЕ поднимать RAM_LIMIT «под 512»** — пик приходит ПОСЛЕ проверки. **НЕ заменять cgroup-метрику суммой RSS** — она двойным счётом shared-страниц давала 638 при живом 512-инстансе.
 
-## 3. ЛЕДЖЕР: что применено / запушено
-_Сессия 2026-06-09…10: применён P0-батч улучшений по аудиту (5 коммитов, по одному файлу на этап) + полностью переписан README. Всё PUSHED, проверено в логах Render (один полный скриншот-успех + штатный text-fallback OLX, без регрессий; сдвиг номеров строк в логах подтверждает деплой)._
-
-| Файл | Последнее изменение | Статус |
+## 4. ЛЕДЖЕР: сессия 2026-06-11
+| Шаг | Что | Итог |
 |---|---|---|
-| `bot.py` | **Этап 1 — T-3:** `_dup_seen.pop(...)` добавлен в ветку `if not security.is_safe(url)`. Повтор заблокированной ссылки больше НЕ копится как «дубликат» и НЕ ведёт легитимного юзера к mute. Анти-фишинг баннер (был ⚠ «push не подтверждён») запушен этим же целым файлом — расхождение закрыто. | **PUSHED** ✅ |
-| `screenshot.py` | **Этап 2 — R-2 + P-1.** R-2: рестарт браузера срабатывает и при `_browser is None or not _browser.is_connected()` (аварийное самовосстановление при OOM-килле рендерера — без ожидания 50 отказов до планового рестарта). P-1: `parts = await asyncio.to_thread(_split_image, full_png)` — нарезка/encode Pillow больше не блокирует event loop. | **PUSHED** ✅ |
-| `queue_manager.py` | **Этап 3 — R-1:** воркер обёрнут в `_worker_supervised` (перезапуск при краше, `CancelledError` пробрасывается). `start_worker` создаёт супервизорный таск. Раньше падение воркера = молчаливое вечное зависание очереди при «зелёном» health. | **PUSHED** ✅ |
-| `metadata.py` | **Этап 4 — H-1:** `follow_redirects=False` + ручной цикл (`_MAX_HOPS=4`) с `is_safe` на КАЖДЫЙ hop ПЕРЕД запросом. Закрыт blind-SSRF: раньше httpx с `follow_redirects=True` коннектился к внутреннему хосту через цепочку 30x до проверки финального URL. Логика проверена на mock-транспорте (к IMDS запрос не уходит). | **PUSHED** ✅ |
-| `main.py` | **Этап 5.** `/health`: +флаг `worker_ok` (R-1), `is_connected()` в `browser_ok`, кеш `getMe` 20 с (M-1, анти-амплификация). Graceful shutdown: единый обработчик `SIGTERM`+`SIGINT` + `server.install_signal_handlers = lambda: None` (пункт №3) — убрал косметический `RuntimeError: Event loop is closed` при редеплое; локальный Ctrl+C теперь идёт через graceful-путь. | **PUSHED** ✅ |
-| `README.md` | Полностью переписан по аудиту: возможности, архитектура, ENV, лимиты-константы, security-модель (SSRF/изоляция/анти-DoS + честные known-limitations), deploy Render/VPS, troubleshooting, roadmap. | **PUSHED** ✅ |
-| `config.py`, `security.py`, `cache.py` | без изменений в этой сессии | **PUSHED** ✅ |
-| `Dockerfile`, `render.yaml`, `docker-compose.yml`, `tests/` | без изменений в этой сессии | **PUSHED** ✅ |
+| cgroup-метрика v1 (inactive_file) | пустой бот показывал 433 → watchdog резал всё | заменена |
+| cgroup-метрика v2 (file−shmem) | покой 200–270, честные пики | **DEPLOYED** ✅ |
+| Компактная графика 780×320 | заглушка+text+fail баннеры; отказ от «заглушка=кадр» | **DEPLOYED** ✅ |
+| RESTART_AT_MB=360 | самоочистка вместо отказов | **DEPLOYED** ✅ |
+| OOM-килл от ОДНОЙ страницы (cudy, спайк +300) | две зависшие заглушки, ребут | вскрыл нужду в guard |
+| RAM-guard 470 + DSF 1.5 | рвём страницу, не инстанс; пик −треть | **DEPLOYED** ✅, проверен в бою (482→abort→OK+text) |
+| RAM-reject из enqueue убран; per-chat 2→8 | «перевантажений» при 2+ юзерах исчез | **DEPLOYED** ✅, бурст 4 ссылок чисто |
 
-> Расхождений код/GitHub больше нет: бывший ⚠ по `bot.py` закрыт (этап 1 пушил весь файл с баннером).
+### ПЕРЕСМОТРЕННЫЕ РЕШЕНИЯ (не «откатывать к старому»!)
+- **«mid-task RAM-kill не делаем» — ОТМЕНЕНО** 2026-06-11: данные показали, что одна страница спайком +300 МБ кладёт инстанс целиком (чужие задачи зависают). Guard = реализованный mid-task abort.
+- **«заглушка = размер кадра, не прыгает» — ОТМЕНЕНО**: вся служебная графика 780×320, сообщение растёт только под скрин.
+- **«RAM-watchdog отсекает задачи на входе» — ОТМЕНЕНО**: очередь ждёт и памяти не ест; отказ на входе только раздражал.
 
----
+## 5. Наблюдать
+- `accept under pressure` в логах — норма; если зачастит БЕЗ последующих guard-абортов — пересмотреть пороги.
+- DSF 1.5: качество кадра 585×960 — ждём реакции заказчика (откат = `DEVICE_SCALE = 2` в screenshot.py, но тогда смотреть пики).
+- 404-страницы («Сторінку не знайдено») скриншотятся и кэшируются как успех — это И ЕСТЬ честное превью мёртвой ссылки; если заказчик захочет особую пометку — отдельная задача.
+- Бурст: хвост очереди ждёт 60–100 с (один воркер) — физика Free, не баг.
+- Реакция 👌 требует разрешённого эмодзи в настройках реакций группы.
 
-## 4. Очередь «возможно позже» (код не трогаем, пока не скажешь)
+## 6. Очередь «возможно позже»
+1. Косметика: при guard/RAM-рестарте лог пишет «after 50 requests» (причина захардкожена в сообщении `_restart_browser`).
+2. Самоудаление сообщения «перевантажений» через 30–60 с (анти-шум).
+3. CAPTURE_CSS 640 → 844 (полный экран, цена у кромки; почти бесплатно по RAM) — решение заказчика.
+4. `queue_manager` guard'ы №5 (повторный start_worker) и №6 (`_processor is None`).
+5. Чистка мёртвого кода `cache.save_media_group` + ветка media_group.
+6. README.md переписать под текущую механику.
+**Сознательно НЕ делаем:** asyncio.Lock вокруг enqueue, H-2 pin-to-IP, R-3, Redis/реплики/CI/метрики — трек роста.
 
-**Закрыто в этой сессии:**
-- ~~`main.py` graceful shutdown (№3 — отключение собственного SIGTERM-handler uvicorn)~~ → ✅ применено (этап 5).
-- Добавлен супервизор воркера (R-1, этап 3). **Важно:** это НЕ то же, что guard'ы №5/№6 ниже — те остаются открытыми.
+## 7. Проверенные факты (новые; старые из прошлых снимков в силе)
+- cgroup-метрика: `memory.current − (file − shmem)`; `file` включает mmap бинарей Chromium (сотни МБ), ядро сбрасывает его перед OOM; shmem без swap не сбрасывается.
+- Сумма RSS python+children завышает на 25–40% (shared-страницы).
+- Render при упавшем деплое крутит предыдущую версию: «бот работает» ≠ «код доехал». Маркер свежего кода — формат RAM-логов.
+- Playwright clip ≤ viewport не вызывает re-raster страницы; растяжка viewport — вызывает (источник старых OOM).
+- `ctx.close()` из параллельной корутины валит активный goto/screenshot TargetClosedError — штатный механизм guard-аборта.
+- editMessageMedia photo→photo работает между любыми размерами/AR.
+- `merge_meta` переносит только известные ключи — служебные флаги мимо него.
+- Смена любого файла в репо (включая PNG) = деплой (образ, COPY . .).
 
-**Ещё открыто (точечное, осмысленно для Render Free):**
-1. `queue_manager.py` — два guard'а (отдельно от супервизора):
-   - №5: защита от повторного `start_worker()` (`if _worker_task and not _worker_task.done(): return`).
-   - №6: `if _processor is None: raise RuntimeError(...)`.
-2. Опционально: анти-фишинг баннер и на кэш-хитах (правка `_send_from_cache` в `bot.py`).
-
-**Сознательно НЕ делаем (для Render Free смысла нет / не про надёжность одного инстанса):**
-- `asyncio.Lock` вокруг `enqueue` (№1 — на single-thread asyncio не нужен).
-- mid-task RAM-kill (№2 — при ~130 МБ из 512 смысла нет; вернуться при росте RAM).
-- **H-2 pin-to-IP** против остаточного DNS-rebinding — требует архитектурного изменения (браузер на запрос либо egress-прокси с pinned-resolver). Текущие меры (двойная проверка `is_safe` + `AsyncDns` off) окно сужают. Known-limitation, закрыть только при выносе на k8s/VPS.
-- **R-3** negative-cache отдельным кешем — при `maxsize=200` вытеснение полезных записей фактически не наступает.
-- Redis / stateless-реплики / egress-прокси / разбиение `bot.py` / CI+тесты / `/metrics` — трек РОСТА, не для одного инстанса на Free (всё состояние in-RAM + один polling-токен = строго один инстанс).
-
----
-
-## 5. Security-постура (что закрыто)
-- **SSRF / DNS-rebinding / cloud-metadata / internal-IP**: `is_safe()` резолвит все A+AAAA, нормализует IPv4-mapped, блок приватных/loopback/link-local/0.0.0.0/8, только порты 80/443, блок внутренних суффиксов. Вызовы: перед очередью, повторно перед `goto`, на КАЖДЫЙ запрос Chromium (route handler), и **на КАЖДЫЙ hop редиректов httpx** (H-1: `follow_redirects=False` + ручной цикл — закрыт blind-SSRF через 30x). `AsyncDns` сближает резолв Chromium с системным (как в is_safe).
-- **RCE контейнера**: свежий Chromium (Playwright 1.60) + non-root pwuser (+ настоящий sandbox локально через `CHROMIUM_SANDBOX=on`).
-- **DoS/OOM**: per-chat квота, RAM-watchdog, лимит тела httpx (2 МБ), clamp высоты, SEMAPHORE=1, рестарт/50 + reconnect.
-- **Secure-by-default**: fail-closed allow-list групп; секреты только через env; `/health` без раскрытия внутренностей (только булевы флаги browser/bot/worker).
-- **Тяжёлый контент**: режутся media/websocket/fonts/реклама-трекеры; on-device AI-модель не качается.
-
-Остаточные риски (Render Free, честно):
-- `--no-sandbox` неизбежен (нет userns/seccomp) → компенсировано non-root.
-- Egress-фильтра на Free нет → защита от SSRF на app-уровне (`is_safe`). Полная — только VPS/`nftables`.
-- Остаточное окно DNS-rebinding (H-2) без pin-to-IP — сужено, не закрыто. См. §4.
-- Сервис засыпает без внешнего входящего HTTP → нужен внешний пингер на `/ping` (UptimeRobot/cron-job.org, ~10 мин).
-
----
-
-## 6. Известные поведения (НЕ баги)
-- **OLX**: `Screenshot failed: TimeoutError` → текстовый фолбэк за ~85–90с. Тяжёлый/анти-бот сайт, так было и до оптимизаций. ELMIR/Hotline рендерятся полностью (4 части) — конвейер исправен.
-- **Cloudflare-челлендж** (`title=Just a moment...`): бот может заскриншотить страницу-заглушку, а не контент. Анти-бот лимит, не регрессия.
-- **TelegramConflictError** при редеплое: новый инстанс начинает polling, пока старый ещё жив пару секунд. Само проходит, когда старый получает SIGTERM. Тревога только если длится >1–2 мин → форс-рестарт пустым коммитом.
-- **`RuntimeError: Event loop is closed`** при редеплое: ~~косметика~~ → ✅ **ИСПРАВЛЕНО** (этап 5: единый SIGTERM/SIGINT-handler + отключение signal-handlers uvicorn → наш `shutdown()` штатно закрывает браузер до сноса loop). Не должно появляться в логах нового инстанса; если появилось — проверить, что `main.py` соответствует леджеру.
-- **Поток `GET /ping 200`** в логах: внутренний health-check Render (`healthCheckPath: /ping`). Не держит от засыпания — для этого внешний пингер.
-
----
-
-## 7. Проверенные факты (не перепроверять в новом чате)
-- Playwright `1.60.0` ↔ образ `mcr.microsoft.com/playwright/python:v1.60.0-noble` (версии должны совпадать; браузеры предустановлены, `playwright install` не нужен).
-- `Pillow>=12.2` (закрыт CVE-2026-40192). CVE-2024-28219 был исправлен ещё в Pillow 10.3.0.
-- `render.yaml`: `type: web`, `runtime: docker`, `plan: free`, `healthCheckPath`, секреты `sync: false`.
-- Render Free спит после ~15 мин без ВНЕШНЕГО входящего HTTP; внутренние health-check не считаются.
-- Managed policies (как в just-the-browser) Playwright-Chromium **НЕ читает** → перенесено launch-флагами.
-- Невалидные имена в `--disable-features` Chromium молча игнорирует (не падает).
-- `server.install_signal_handlers = lambda: None` корректно отключает собственные signal-handler'ы uvicorn (вызывается без аргументов внутри `serve()`), отдавая SIGTERM/SIGINT нашему `shutdown()`.
-
----
+### ПРОЦЕСС (обязательно, после инцидента 2026-06-10)
+1. **Код-файлы — ТОЛЬКО файлом на скачивание** (heredoc-вставка молча обрезается терминалом: битый bot.py:376 валил все деплои).
+2. **Перед КАЖДЫМ пушем:** `python3 -m py_compile bot.py cache.py config.py main.py metadata.py queue_manager.py ram.py screenshot.py security.py && rm -rf __pycache__ && echo ALL_FILES_OK`.
+3. Rollback в дашборде Render при упавшем деплое не нужен.
 
 ## 8. Как продолжить в новом чате
-1. Запушить текущее (если что-то локально не закоммичено): `git add . && git commit -m "stable" && git push`
-2. Свежий дамп (на своей машине, из папки репозитория):
+1. Запушить текущее (после py_compile!).
+2. Свежий дамп из папки репо:
    `{ echo '# Дамп'; for f in $(find . -name "*.py" -o -name "Dockerfile" -o -name "*.yml" -o -name "*.txt" | grep -v .git | sort); do echo "## $f"; echo '```'; cat "$f"; echo '```'; done; } > project_dump.md`
-3. В новый чат принести: `HOW_TO_HELP_ME.md` + `PROJECT_STATE.md` + `project_dump.md`.
+3. В новый чат: HOW_TO_HELP_ME.md + PROJECT_STATE.md + project_dump.md.
 
-## 9. Памятка-команды
-- Push: `git add . && git commit -m "что и зачем" && git push`
-- Форс-рестарт (TelegramConflictError): `git commit --allow-empty -m "restart" && git push`
-- Проверить health: открыть `https://safeshot-bot.onrender.com/health` → ждём `{"status":"ok","browser":true,"bot":true,"worker":true}`
+## 9. Памятка
+- Health: `https://safeshot-bot.onrender.com/health`
+- Форс-рестарт: `git commit --allow-empty -m "restart" && git push`
+- Откат: Render Dashboard → Rollback на «stable» / локально перезаписать файлы рабочими версиями (БЕЗ git revert) и запушить.
