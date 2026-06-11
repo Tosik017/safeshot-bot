@@ -195,19 +195,30 @@ async def on_my_chat_member(event: ChatMemberUpdated, bot: Bot):
         except Exception as e:
             logger.error(f"leave_chat failed chat={chat.id}: {e}")
 
-# --- Фото-заглушка (single-message flow) ---
+# --- Фото-медіа single-message flow: заглушка + компактні банери ---
 # Telegram НЕ дозволяє відредагувати текстове повідомлення у фото. Тому статус
 # одразу йде ФОТО-заглушкою з caption-попередженням, а результат приходить через
 # editMessageMedia/editMessageCaption у ТЕ САМЕ повідомлення. Одне повідомлення
 # на посилання — нічого не видаляємо, нічого не плодимо.
-# МОБІЛЬНИЙ ФОРМАТ: 780×1280 = точний розмір першого кадра скриншота
-# (MOBILE_WIDTH 390 × DEVICE_SCALE 2 на PART_HEIGHT 1280) → editMessageMedia
-# не змінює форму повідомлення, картинка не «стрибає».
-PLACEHOLDER_FILE = "placeholder.png"   # свій логотип групи (вертикальний 780×1280) — бот візьме його
-_PLACEHOLDER_W, _PLACEHOLDER_H = 780, 1280
+# УСІ службові картинки КОМПАКТНІ (780×320 = 1/4 висоти кадра скриншота):
+# заглушка-старт, текст-фолбек і фейл. Повідомлення в стрічці РОСТЕ (320→1280)
+# лише коли є реальний контент — скриншот; очікування і невдачі місця не їдять.
+# (Свідома відмова від старого правила «заглушка = розмір кадра, не стрибає»:
+# editMessageMedia photo→photo дозволений між будь-якими розмірами.)
+# Кастомізація: поклади свій PNG відповідного імені в корінь репо — бот візьме
+# його замість згенерованого Pillow-фолбека.
+PLACEHOLDER_FILE = "placeholder.png"     # 780×320 — старт flow
+BANNER_TEXT_FILE = "banner_text.png"     # 780×320 — скриншота немає, картка в caption
+BANNER_FAIL_FILE = "banner_fail.png"     # 780×320 — превʼю не вдалося
+_PLACEHOLDER_W, _PLACEHOLDER_H = 780, 320
+_BANNER_W, _BANNER_H = 780, 320
 
-_placeholder_png: bytes | None = None
-_placeholder_fid: str | None = None    # file_id після першого аплоада → далі без байтів
+# Палітра фірмового банера NO ESCAPE
+_NAVY = (14, 42, 71)
+_CYAN = (41, 199, 242)
+_AMBER = (245, 158, 11)
+_SLATE = (203, 213, 225)
+_WHITE = (255, 255, 255)
 
 
 def _font(size: int):
@@ -219,46 +230,100 @@ def _font(size: int):
 
 
 def _build_placeholder() -> bytes:
-    if os.path.exists(PLACEHOLDER_FILE):
-        with open(PLACEHOLDER_FILE, "rb") as f:
-            return f.read()
-    img = Image.new("RGB", (_PLACEHOLDER_W, _PLACEHOLDER_H), (15, 23, 42))
+    """Pillow-фолбек заглушки (горизонтальний 780×320), якщо placeholder.png
+    немає в корені. Композиція = як у банерів: іконка зліва, текст справа."""
+    img = Image.new("RGB", (_PLACEHOLDER_W, _PLACEHOLDER_H), _NAVY)
     d = ImageDraw.Draw(img)
-    amber = (245, 158, 11)
-
-    def center(y: int, s: str, font, fill):
-        x = (_PLACEHOLDER_W - d.textbbox((0, 0), s, font=font)[2]) // 2
-        d.text((x, y), s, font=font, fill=fill)
-
-    # Попереджувальний трикутник зі знаком оклику (вертикальна композиція)
-    d.polygon([(390, 180), (260, 430), (520, 430)], fill=amber)
-    center(265, "!", _font(130), (15, 23, 42))
-
-    center(560, "SafeShot", _font(86), (255, 255, 255))
-    center(720, "ГОТУЮ БЕЗПЕЧНИЙ", _font(52), (203, 213, 225))
-    center(790, "ПЕРЕГЛЯД…", _font(52), (203, 213, 225))
-    center(930, "НЕ ПЕРЕХОДЬТЕ", _font(46), amber)
-    center(995, "ЗА ПОСИЛАННЯМ", _font(46), amber)
-
+    d.polygon([(120, 70), (45, 235), (195, 235)], fill=_AMBER)
+    f = _font(90)
+    bb = d.textbbox((0, 0), "!", font=f)
+    d.text((120 - (bb[2] - bb[0]) // 2 - bb[0], 165 - (bb[3] - bb[1]) // 2 - bb[1]), "!", font=f, fill=_NAVY)
+    t1, t2 = "ГОТУЮ БЕЗПЕЧНИЙ ПЕРЕГЛЯД…", "НЕ ПЕРЕХОДЬТЕ"
+    t3 = "ЗА ПОСИЛАННЯМ!"
+    _banner_line(d, 220, 750, 60, t1, _banner_fit(d, t1, 510, 40), _SLATE)
+    _banner_line(d, 220, 750, 135, t2, _banner_fit(d, t2, 510, 46), _AMBER)
+    _banner_line(d, 220, 750, 205, t3, _banner_fit(d, t3, 510, 46), _AMBER)
     buf = BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
 
 
-def _placeholder_media():
+def _banner_fit(d, text: str, max_w: int, start: int):
+    """Найбільший розмір шрифту, за якого рядок влазить у max_w."""
+    size = start
+    while size > 18:
+        f = _font(size)
+        if d.textbbox((0, 0), text, font=f)[2] <= max_w:
+            return f
+        size -= 2
+    return _font(18)
+
+
+def _banner_line(d, x0: int, x1: int, y: int, text: str, font, fill):
+    w = d.textbbox((0, 0), text, font=font)[2]
+    d.text((x0 + (x1 - x0 - w) // 2, y), text, font=font, fill=fill)
+
+
+def _build_banner_text() -> bytes:
+    """ℹ️-банер: скриншот не вийшов, але метадані є — деталі в caption."""
+    img = Image.new("RGB", (_BANNER_W, _BANNER_H), _NAVY)
+    d = ImageDraw.Draw(img)
+    d.ellipse((50, 90, 190, 230), outline=_CYAN, width=8)
+    f = _font(96)
+    bb = d.textbbox((0, 0), "i", font=f)
+    d.text((120 - (bb[2] - bb[0]) // 2 - bb[0], 160 - (bb[3] - bb[1]) // 2 - bb[1]), "i", font=f, fill=_CYAN)
+    t1, t2 = "СКРИНШОТ НЕДОСТУПНИЙ", "ДЕТАЛІ — В КАРТЦІ НИЖЧЕ"
+    _banner_line(d, 220, 750, 105, t1, _banner_fit(d, t1, 510, 44), _SLATE)
+    _banner_line(d, 220, 750, 175, t2, _banner_fit(d, t2, 510, 38), _CYAN)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _build_banner_fail() -> bytes:
+    """❌-банер: превʼю не вдалося взагалі."""
+    img = Image.new("RGB", (_BANNER_W, _BANNER_H), _NAVY)
+    d = ImageDraw.Draw(img)
+    d.polygon([(120, 80), (50, 230), (190, 230)], fill=_AMBER)
+    f = _font(84)
+    bb = d.textbbox((0, 0), "!", font=f)
+    d.text((120 - (bb[2] - bb[0]) // 2 - bb[0], 168 - (bb[3] - bb[1]) // 2 - bb[1]), "!", font=f, fill=_NAVY)
+    t1, t2, t3 = "ПРЕВ'Ю НЕ ВДАЛОСЯ", "НЕ ПЕРЕХОДЬТЕ", "ЗА ПОСИЛАННЯМ!"
+    _banner_line(d, 220, 750, 65, t1, _banner_fit(d, t1, 510, 44), _WHITE)
+    _banner_line(d, 220, 750, 140, t2, _banner_fit(d, t2, 510, 46), _AMBER)
+    _banner_line(d, 220, 750, 210, t3, _banner_fit(d, t3, 510, 46), _AMBER)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+# Реєстр медіа: байти будуються/читаються один раз за процес, file_id після
+# першого аплоада — далі Telegram віддає по file_id, нуль повторних байтів.
+_media_state: dict[str, dict] = {
+    "placeholder": {"file": PLACEHOLDER_FILE, "build": _build_placeholder, "png": None, "fid": None},
+    "text":        {"file": BANNER_TEXT_FILE, "build": _build_banner_text, "png": None, "fid": None},
+    "fail":        {"file": BANNER_FAIL_FILE, "build": _build_banner_fail, "png": None, "fid": None},
+}
+
+
+def _media(name: str):
     """file_id (якщо вже аплоадили) або байти для першого аплоада."""
-    global _placeholder_png
-    if _placeholder_fid:
-        return _placeholder_fid
-    if _placeholder_png is None:
-        _placeholder_png = _build_placeholder()
-    return BufferedInputFile(_placeholder_png, filename="safeshot.png")
+    st = _media_state[name]
+    if st["fid"]:
+        return st["fid"]
+    if st["png"] is None:
+        if os.path.exists(st["file"]):
+            with open(st["file"], "rb") as f:
+                st["png"] = f.read()
+        else:
+            st["png"] = st["build"]()
+    return BufferedInputFile(st["png"], filename=f"safeshot_{name}.png")
 
 
-def _remember_placeholder(sent: Message):
-    global _placeholder_fid
-    if not _placeholder_fid and sent and sent.photo:
-        _placeholder_fid = sent.photo[-1].file_id
+def _remember_media(name: str, sent):
+    st = _media_state[name]
+    if not st["fid"] and sent and getattr(sent, "photo", None):
+        st["fid"] = sent.photo[-1].file_id
 
 # --- Тексти (лаконічні, цитатою, з іконками) ---
 # Статичний текст без вводу юзера → parse_mode=HTML безпечний.
@@ -402,6 +467,23 @@ def _build_card(msg: Message, meta: dict) -> tuple[str, list]:
     return trim_caption(msg_text, msg_entities)
 
 
+async def _fail_banner(status: Message):
+    """Заглушку → компактний fail-банер (1/4 висоти) + FAIL_CAPTION одним edit.
+    Якщо edit_media не пройшов (повідомлення видалили тощо) — хоча б caption."""
+    try:
+        sent = await status.edit_media(media=InputMediaPhoto(
+            media=_media("fail"), caption=FAIL_CAPTION, parse_mode="HTML",
+        ))
+        if isinstance(sent, Message):
+            _remember_media("fail", sent)
+    except Exception as e:
+        logger.warning(f"fail-banner edit skipped: {type(e).__name__}")
+        try:
+            await status.edit_caption(caption=FAIL_CAPTION, parse_mode="HTML")
+        except Exception as e2:
+            logger.warning(f"fail-caption edit skipped: {type(e2).__name__}")
+
+
 async def _send_from_cache(msg: Message, url: str, entry: dict):
     """Кеш-хіт = одразу ОДНЕ готове повідомлення (без стадії заглушки)."""
     kind = entry.get("kind")
@@ -411,8 +493,9 @@ async def _send_from_cache(msg: Message, url: str, entry: dict):
     if kind == "photo":
         await msg.reply_photo(photo=entry["file_id"], caption=cap_text, caption_entities=cap_entities)
     elif kind == "text":
-        sent = await msg.reply_photo(photo=_placeholder_media(), caption=cap_text, caption_entities=cap_entities)
-        _remember_placeholder(sent)
+        # Скриншота в кеші немає → одразу компактний банер, а не велика заглушка.
+        sent = await msg.reply_photo(photo=_media("text"), caption=cap_text, caption_entities=cap_entities)
+        _remember_media("text", sent)
     else:
         # media_group лишився тільки в теорії: кеш у RAM, після деплою порожній.
         logger.warning(f"CACHE unsupported kind={kind} — skip")
@@ -534,11 +617,11 @@ async def handle(msg: Message, bot: Bot):
     # ОДНЕ повідомлення на посилання: фото-заглушка з попередженням, далі
     # editMessageMedia/Caption перетворює ЇЇ Ж на результат. Нічого не видаляємо.
     status = await msg.reply_photo(
-        photo=_placeholder_media(),
+        photo=_media("placeholder"),
         caption=_warning_caption(position),
         parse_mode="HTML",
     )
-    _remember_placeholder(status)
+    _remember_media("placeholder", status)
     start = time.monotonic()
 
     httpx_task = asyncio.create_task(metadata.fetch(url))
@@ -548,10 +631,7 @@ async def handle(msg: Message, bot: Bot):
     except Exception as e:
         logger.error(f"FAIL url-task error={type(e).__name__}")
         cache.save_failure(url, type(e).__name__)
-        try:
-            await status.edit_caption(caption=FAIL_CAPTION, parse_mode="HTML")
-        except Exception as e2:
-            logger.warning(f"fail-caption edit skipped: {type(e2).__name__}")
+        await _fail_banner(status)
         return
 
     httpx_meta = await httpx_task
@@ -583,8 +663,15 @@ async def handle(msg: Message, bot: Bot):
                 cache.save_photo(url, sent.photo[-1].file_id, meta)
             logger.info(f"OK+photo first_of={len(parts)} time={elapsed:.1f}s")
         else:
-            # Текст-фолбек: картинка-попередження лишається, картка йде в caption.
-            await status.edit_caption(caption=cap_text, caption_entities=cap_entities)
+            # Текст-фолбек: велика заглушка БІЛЬШЕ НЕ висить — міняємо її на
+            # компактний банер 1/4 висоти, картка йде в caption того ж повідомлення.
+            sent = await status.edit_media(media=InputMediaPhoto(
+                media=_media("text"),
+                caption=cap_text,
+                caption_entities=cap_entities,
+            ))
+            if isinstance(sent, Message):
+                _remember_media("text", sent)
             if meta and meta.get("title"):
                 cache.save_text_only(url, meta)
             else:
@@ -594,8 +681,5 @@ async def handle(msg: Message, bot: Bot):
     except Exception as e:
         logger.error(f"FAIL send error={type(e).__name__}")
         cache.save_failure(url, type(e).__name__)
-        try:
-            await status.edit_caption(caption=FAIL_CAPTION, parse_mode="HTML")
-        except Exception as e2:
-            logger.warning(f"fail-caption edit skipped: {type(e2).__name__}")
+        await _fail_banner(status)
         return
