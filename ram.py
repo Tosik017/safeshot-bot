@@ -18,16 +18,19 @@ def _read_int(path: str) -> int:
         return int(f.read().strip())
 
 
-def _inactive_file(stat_path: str) -> int:
+def _stat_map(stat_path: str) -> dict:
+    m = {}
     try:
         with open(stat_path) as f:
             for line in f:
                 key, _, val = line.partition(" ")
-                if key in ("inactive_file", "total_inactive_file"):
-                    return int(val)
-    except (OSError, ValueError):
+                try:
+                    m[key] = int(val)
+                except ValueError:
+                    continue
+    except OSError:
         pass
-    return 0
+    return m
 
 
 def rss_breakdown_mb() -> tuple[float, float]:
@@ -45,19 +48,28 @@ def rss_breakdown_mb() -> tuple[float, float]:
 
 
 def used_mb() -> tuple[float, str]:
-    """(використано_MB, джерело). Те, від чого реально приходить OOM-кілл."""
+    """(використано_MB, джерело). Те, від чого реально приходить OOM-кілл:
+    used = current - (file - shmem). 'file' = ВЕСЬ page cache, включно з
+    mmap'нутими бінарями Chromium (сотні MB) — ядро ВИКИДАЄ його перед OOM
+    (калібровка: 'used=433MB' у порожньому боті, бо вираховувався лише
+    inactive_file; інстанс 512MB пережив 'rss-суму 638'). shmem сидить
+    усередині 'file', але без swap НЕ викидається → лишаємо в used."""
     # cgroup v2 (очікувано на Render)
     try:
         cur = _read_int(f"{_CG2}/memory.current")
-        used = max(cur - _inactive_file(f"{_CG2}/memory.stat"), 0)
-        return used / 1048576, "cgroup2"
+        st = _stat_map(f"{_CG2}/memory.stat")
+        reclaimable = max(st.get("file", 0) - st.get("shmem", 0), 0)
+        return max(cur - reclaimable, 0) / 1048576, "cgroup2"
     except (OSError, ValueError):
         pass
-    # cgroup v1
+    # cgroup v1 (ключі cache/total_cache, shmem/total_shmem)
     try:
         cur = _read_int(f"{_CG1}/memory.usage_in_bytes")
-        used = max(cur - _inactive_file(f"{_CG1}/memory.stat"), 0)
-        return used / 1048576, "cgroup1"
+        st = _stat_map(f"{_CG1}/memory.stat")
+        cache = st.get("total_cache", st.get("cache", 0))
+        shmem = st.get("total_shmem", st.get("shmem", 0))
+        reclaimable = max(cache - shmem, 0)
+        return max(cur - reclaimable, 0) / 1048576, "cgroup1"
     except (OSError, ValueError):
         pass
     # Фолбек: сума RSS (завищує через shared-сторінки). Якщо в логах постійно
