@@ -134,7 +134,9 @@ async def _handle_duplicate_spam(bot: Bot, msg: Message, chat_id: int, user_id: 
     await _delete(bot, chat_id, msg.message_id)
 
     if strike == 1:
-        text = f"⏳ {name}, це посилання вже в обробці.\nНе дублюйте — результат буде нижче. 👇"
+        # Single-message flow: результат зʼявляється В ЗАГЛУШЦІ, яка стоїть ВИЩЕ
+        # цього попередження («нижче 👇» — рудимент старого flow з окремою відповіддю).
+        text = f"⏳ {name}, це посилання вже в обробці.\nНе дублюйте — результат зʼявиться у повідомленні бота вище. ☝️"
     elif strike == 2:
         text = f"⚠️ {name}, досить дублювати те саме посилання.\nЗупиніться, будь ласка."
     elif strike == 3:
@@ -332,7 +334,7 @@ def _warning_caption(position: int) -> str:
     return (
         "🚨⚠️ <b>СТОП! НЕ ПЕРЕХОДЬТЕ ЗА ПОСИЛАННЯМ!</b> ⚠️🚨\n"
         "<blockquote>🛡 Готую безпечний перегляд — до 1–2 хв.\n"
-        "⏳ Результат з'явиться прямо в цьому повідомленні. 👇</blockquote>"
+        "⏳ Результат з'явиться прямо в цьому повідомленні.</blockquote>"
         + queue_line
     )
 

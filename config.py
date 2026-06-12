@@ -68,9 +68,20 @@ DISABLED_THREADS, DISABLED_GENERAL_CHATS = _parse_disabled_threads(
 # Матчинг: точний hostname або субдомен по межі крапки ("m.youtube.com" → так,
 # "youtube.com.evil.top" → ні). Налаштування: env TRUSTED_DOMAINS, через кому/пробіл.
 # env НЕ задано → дефолтний список нижче; задано порожнім → whitelist ВИМКНЕНО.
-# Свідомо НЕ включаємо google.com (Google Forms/Drive — живий фішинг-вектор),
-# t.me (скам-канали/боти) та соцмережі/маркетплейси (скам-магазини).
-_DEFAULT_TRUSTED = "youtube.com youtu.be wikipedia.org github.com"
+# Свідомо НЕ включаємо google.com (Google Forms/Drive — живий фішинг-вектор)
+# і маркетплейси (OLX/Rozetka/Epicentr — превʼю магазинів і є робота бота).
+# ПЕРЕГЛЯНУТО 2026-06-12: t.me/соцмережі ДОДАНО за рішенням власника — Telegram
+# сам малює нативне превʼю, headless їх однаково не рендерить (логін-стіни);
+# ризик прийнято: 👌 на скам-каналі t.me виглядає як схвалення бота.
+# Субдомени покриваються суфікс-матчем (vm.tiktok.com, m.youtube.com тощо).
+_DEFAULT_TRUSTED = (
+    "youtube.com youtu.be wikipedia.org github.com "
+    "t.me telegram.me telegram.org "
+    "tiktok.com instagram.com facebook.com fb.com fb.watch "
+    "x.com twitter.com whatsapp.com wa.me viber.com "
+    "reddit.com twitch.tv pinterest.com linkedin.com "
+    "spotify.com soundcloud.com vimeo.com discord.com discord.gg imdb.com"
+)
 
 
 def _parse_trusted_domains(raw: str) -> frozenset[str]:
