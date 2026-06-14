@@ -69,6 +69,30 @@ window.chrome = window.chrome || {runtime: {}};
 Object.defineProperty(navigator, 'languages', {get: () => ['uk-UA','uk','ru','en']});
 """
 
+# Cloudflare interstitial ("Just a moment...", Turnstile/managed challenge):
+# реальний контент сторінки ще НЕ завантажений — скриншот зняв би лише
+# "Verifying...". Детектимо за маркерами challenge-сторінки (НЕ за фактом, що
+# сайт за Cloudflare CDN — мільйони сайтів за CF віддають нормальний HTML без
+# цих маркерів). Спрацювання → ранній вихід ДО зйомки: не палимо RAM на рендер
+# заглушки і не чекаємо таймаут. Обхід challenge headless'ом з датацентрового
+# IP Render Free неможливий (IP+fingerprint+поведінка), тож чесна картка краще
+# за мусорний скрин.
+_CF_CHALLENGE_MARKERS = (
+    "challenges.cloudflare.com",      # Turnstile-віджет
+    "cf-browser-verification",        # класичний interstitial
+    "cf_chl_",                        # _cf_chl_opt / cf_chl_jschl_* — об'єкти challenge
+    "/cdn-cgi/challenge-platform/",   # скрипт challenge-платформи
+)
+_CF_TITLES = ("just a moment...", "just a moment", "один момент…", "один момент...")
+
+
+def _is_cloudflare_challenge(html: str, title: str | None) -> bool:
+    if (title or "").strip().lower() in _CF_TITLES:
+        return True
+    low = html.lower()
+    return any(m in low for m in _CF_CHALLENGE_MARKERS)
+
+
 COOKIE_SELECTORS = [
     "button[id*='accept']", "button[class*='accept']",
     "button[aria-label*='Accept']", "button[aria-label*='Agree']",
@@ -305,6 +329,13 @@ async def shoot(url: str) -> tuple[list[bytes], dict]:
             html = await page.content()
             browser_meta = parse_from_html(html, url)
             logger.info(f"Browser meta: title={browser_meta.get('title')} price={browser_meta.get('price')}")
+
+            # Cloudflare interstitial → не знімаємо заглушку "Verifying...":
+            # повертаємо прапорець, bot.py покаже чесну картку. Ранній вихід
+            # економить RAM (немає рендеру/скриншота) і час (немає таймауту).
+            if _is_cloudflare_challenge(html, browser_meta.get("title")):
+                logger.info("Cloudflare challenge detected — skip screenshot, return _protected")
+                return [], {"_protected": "cloudflare"}
 
             # OOM-фікс: viewport НЕ розтягуємо (раніше set_viewport_size до 2560
             # CSS px → Chromium растеризував усю сторінку → OOM-кілл інстанса на

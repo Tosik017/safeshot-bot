@@ -1,4 +1,4 @@
-import os, re, time, asyncio
+import os, re, time, asyncio, html
 from datetime import datetime, timezone
 from io import BytesIO
 from urllib.parse import urlsplit
@@ -299,12 +299,30 @@ def _build_banner_fail() -> bytes:
     return buf.getvalue()
 
 
+def _build_banner_protected() -> bytes:
+    """🛡-банер: сайт за Cloudflare-challenge, прев'ю недоступне. Тон НЕЙТРАЛЬНИЙ
+    (не fail): посилання легітимне, це не загроза — лише захист сайту від ботів."""
+    img = Image.new("RGB", (_BANNER_W, _BANNER_H), _NAVY)
+    d = ImageDraw.Draw(img)
+    # Щит-шестикутник + галка всередині (без emoji-шрифта — геометрія, як у fail).
+    d.polygon([(120, 70), (190, 102), (190, 168), (120, 235), (50, 168), (50, 102)],
+              outline=_CYAN, width=8)
+    d.line([(92, 158), (114, 184), (158, 120)], fill=_CYAN, width=11, joint="curve")
+    t1, t2 = "САЙТ ПІД ЗАХИСТОМ", "CLOUDFLARE • ПРЕВ'Ю НЕДОСТУПНЕ"
+    _banner_line(d, 220, 750, 105, t1, _banner_fit(d, t1, 510, 44), _SLATE)
+    _banner_line(d, 220, 750, 175, t2, _banner_fit(d, t2, 510, 38), _CYAN)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 # Реєстр медіа: байти будуються/читаються один раз за процес, file_id після
 # першого аплоада — далі Telegram віддає по file_id, нуль повторних байтів.
 _media_state: dict[str, dict] = {
     "placeholder": {"file": PLACEHOLDER_FILE, "build": _build_placeholder, "png": None, "fid": None},
     "text":        {"file": BANNER_TEXT_FILE, "build": _build_banner_text, "png": None, "fid": None},
     "fail":        {"file": BANNER_FAIL_FILE, "build": _build_banner_fail, "png": None, "fid": None},
+    "protected":   {"file": "banner_protected.png", "build": _build_banner_protected, "png": None, "fid": None},
 }
 
 
@@ -344,6 +362,19 @@ FAIL_CAPTION = (
     "<blockquote>🚨 Тим більше НЕ переходьте за посиланням! ⚠️\n"
     "🔁 Спробуйте пізніше або знайдіть товар через Google.</blockquote>"
 )
+
+
+def _protected_caption(url: str) -> str:
+    """Чесна картка для сторінки за Cloudflare-challenge. Статичний текст +
+    екранований host (URL недовірений) → parse_mode=HTML безпечний."""
+    host = html.escape(urlsplit(url).netloc or url)
+    return (
+        "🛡 <b>Сайт під захистом Cloudflare</b>\n"
+        "<blockquote>Сайт показує перевірку «ви не робот» — безпечне прев'ю недоступне.\n"
+        f"🔗 Посилання веде на: {host}\n"
+        "⚠️ Паролі й дані картки — НІКОЛИ на незнайомих сайтах.</blockquote>"
+    )
+
 
 DISCLAIMER = (
     "🚨 Не довіряйте незнайомим посиланням!\n"
@@ -642,6 +673,25 @@ async def handle(msg: Message, bot: Bot):
     logger.info(f"Final meta: title={meta.get('title')} price={meta.get('price')}")
 
     elapsed = time.monotonic() - start
+
+    # Cloudflare-challenge: screenshot.py не знімав заглушку, прислав прапорець.
+    # Окрема гілка — нейтральна 🛡-картка зі справжнім доменом. НЕ кешуємо:
+    # challenge-сторінка легка, повтор дешевий; кешування kind="protected" —
+    # окрема задача (треба чіпати cache.py + _send_from_cache).
+    if browser_meta.get("_protected") == "cloudflare":
+        try:
+            sent = await status.edit_media(media=InputMediaPhoto(
+                media=_media("protected"),
+                caption=_protected_caption(url),
+                parse_mode="HTML",
+            ))
+            if isinstance(sent, Message):
+                _remember_media("protected", sent)
+            logger.info(f"OK+protected(cloudflare) time={elapsed:.1f}s")
+        except Exception as e:
+            logger.error(f"FAIL protected send error={type(e).__name__}")
+            await _fail_banner(status)
+        return
 
     # «Сторінка довша за перший екран» тепер визначає screenshot.py (знімаємо
     # ЛИШЕ перший екран — частин завжди ≤1, OOM-фікс) і шле прапорець у
