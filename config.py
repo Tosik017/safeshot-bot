@@ -69,18 +69,23 @@ DISABLED_THREADS, DISABLED_GENERAL_CHATS = _parse_disabled_threads(
 # "youtube.com.evil.top" → ні). Налаштування: env TRUSTED_DOMAINS, через кому/пробіл.
 # env НЕ задано → дефолтний список нижче; задано порожнім → whitelist ВИМКНЕНО.
 # Свідомо НЕ включаємо google.com (Google Forms/Drive — живий фішинг-вектор)
-# і маркетплейси (OLX/Rozetka/Epicentr — превʼю магазинів і є робота бота).
+# і маркетплейси OLX/Epicentr (превʼю магазинів і є робота бота).
 # ПЕРЕГЛЯНУТО 2026-06-12: t.me/соцмережі ДОДАНО за рішенням власника — Telegram
 # сам малює нативне превʼю, headless їх однаково не рендерить (логін-стіни);
 # ризик прийнято: 👌 на скам-каналі t.me виглядає як схвалення бота.
-# Субдомени покриваються суфікс-матчем (vm.tiktok.com, m.youtube.com тощо).
+# ПЕРЕГЛЯНУТО 2026-06-14: rozetka.com.ua ДОДАНО — сайт за Cloudflare-challenge,
+# превʼю фізично не знімається (див. _is_cloudflare_challenge у screenshot.py),
+# тож тиха реакція 👌 чистіша за картку-щит на кожне посилання. OLX/Epicentr
+# (без challenge, превʼю працює) лишаються поза whitelist.
+# Субдомени покриваються суфікс-матчем (auto.rozetka.com.ua, vm.tiktok.com тощо).
 _DEFAULT_TRUSTED = (
     "youtube.com youtu.be wikipedia.org github.com "
     "t.me telegram.me telegram.org "
     "tiktok.com instagram.com facebook.com fb.com fb.watch "
     "x.com twitter.com whatsapp.com wa.me viber.com "
     "reddit.com twitch.tv pinterest.com linkedin.com "
-    "spotify.com soundcloud.com vimeo.com discord.com discord.gg imdb.com"
+    "spotify.com soundcloud.com vimeo.com discord.com discord.gg imdb.com "
+    "rozetka.com.ua"
 )
 
 
