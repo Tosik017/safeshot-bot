@@ -11,7 +11,9 @@ services:
       # За замовчуванням лишаємо як на Render (--no-sandbox), але з cap-drop.
     ports:
       - "8000:8000"
-    ipc: host                  # Chromium у контейнері: уникнути падінь через /dev/shm
+    # ipc: host НЕ потрібен — Chromium запускається з --disable-dev-shm-usage
+    # (screenshot.py), пише у /tmp (tmpfs нижче), а не у /dev/shm. ipc:host
+    # дав би контейнеру доступ до IPC namespace хоста — зайвий ризик ізоляції.
     user: pwuser               # non-root
     read_only: true            # коренева FS лише для читання
     tmpfs:

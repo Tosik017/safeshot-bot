@@ -3,6 +3,7 @@
 блокує приватні/loopback/link-local/reserved діапазони, нестандартні порти
 й внутрішні host-суфікси. Викликається перед чергою, на КОЖЕН запит Chromium
 (route handler) і після редиректів httpx."""
+import asyncio
 import ipaddress
 import socket
 from urllib.parse import urlparse
@@ -44,10 +45,12 @@ def _ip_blocked(ip_str: str) -> bool:
     )
 
 
-def is_safe(url: str) -> bool:
+async def is_safe(url: str) -> bool:
     """True лише якщо схема http(s), порт дозволений, host не внутрішній,
     і ВСІ його IP (A+AAAA) — публічні. Будь-яка помилка резолву → False
-    (безпечний дефолт)."""
+    (безпечний дефолт). DNS-резолв ідe через loop.getaddrinfo (thread executor),
+    щоб не блокувати event loop — інакше один повільний/застиглий резолвер
+    стопорить увесь бот (черга, /health, всі чати) на час system DNS timeout."""
     try:
         p = urlparse(url)
         if p.scheme not in ("http", "https"):
@@ -68,7 +71,8 @@ def is_safe(url: str) -> bool:
         except ValueError:
             pass
         # Доменне імʼя: резолвимо ВСІ адреси, кожна має бути публічною.
-        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        loop = asyncio.get_running_loop()
+        infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
         ips = {info[4][0] for info in infos}
         if not ips:
             return False

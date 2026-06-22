@@ -44,7 +44,7 @@ Python 3.12 · aiogram 3 (polling) · Playwright/Chromium (образ `mcr.micro
 - Пуш в `main` → автодеплой. **Внимание:** при упавшем деплое Render продолжает крутить предыдущую версию — «бот отвечает» ≠ «новый код доехал».
 - Shell на Free недоступен; форс-рестарт: `git commit --allow-empty -m "restart" && git push` или Suspend/Resume.
 - Free засыпает без внешнего HTTP — нужен внешний пингер на `/ping`.
-- Health-check: `GET /health` → `{"status":"ok","browser":true,"bot":true,"worker":true}`.
+- Health-check: `GET /health` → `{"status":"ok","browser":true,"bot":true,"worker":true}`. Задайте `HEALTH_TOKEN`, чтобы закрыть его заголовком (`curl -H "X-Health-Token: ..." .../health`) — без токена в env эндпоинт остаётся открытым.
 
 ## Конфигурация
 

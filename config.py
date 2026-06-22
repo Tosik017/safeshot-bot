@@ -7,6 +7,12 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 PORT = int(os.environ.get("PORT", 8000))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
+# /health (на відміну від /ping, який юзає Render healthCheckPath і зовнішній
+# пінгер) віддає статус browser/bot/worker — корисна recon-інформація для
+# таймінгу атак. Не задано → ендпоінт лишається відкритим (як було); задано →
+# потрібен заголовок X-Health-Token.
+HEALTH_TOKEN = os.environ.get("HEALTH_TOKEN", "")
+
 
 def _parse_group_ids(*raw_values: str) -> frozenset[int]:
     ids: set[int] = set()

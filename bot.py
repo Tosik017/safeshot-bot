@@ -122,12 +122,15 @@ async def _notice(bot: Bot, msg: Message, skey: tuple, text: str):
     except Exception as e:
         logger.warning(f"notice failed chat={msg.chat.id}: {e}")
 
-async def _handle_duplicate_spam(bot: Bot, msg: Message, chat_id: int, user_id: int):
-    """Ескалація на повтор того ж URL: 🗑+⏳ → 🗑+⚠️ → 🗑+🛑 → 🗑+🚫 mute 5 хв."""
-    skey = (chat_id, user_id)
+async def _handle_duplicate_spam(bot: Bot, msg: Message, chat_id: int, sender_key, user_id: int | None):
+    """Ескалація на повтор того ж URL: 🗑+⏳ → 🗑+⚠️ → 🗑+🛑 → 🗑+🚫 mute 5 хв.
+    sender_key — user_id або sender_chat.id (для анонімних sender'ів) — ключ страйків.
+    user_id — РЕАЛЬНИЙ Telegram user id або None; mute можливий лише з ним
+    (restrict_chat_member не приймає sender_chat.id)."""
+    skey = (chat_id, sender_key)
     strike = _strikes.get(skey, 0) + 1
     _strikes[skey] = strike
-    logger.info(f"DUP_SPAM chat={chat_id} user={user_id} strike={strike}")
+    logger.info(f"DUP_SPAM chat={chat_id} sender={sender_key} strike={strike}")
 
     name = (msg.from_user.first_name if msg.from_user else None) or "Користувач"
 
@@ -141,8 +144,8 @@ async def _handle_duplicate_spam(bot: Bot, msg: Message, chat_id: int, user_id: 
         text = f"⚠️ {name}, досить дублювати те саме посилання.\nЗупиніться, будь ласка."
     elif strike == 3:
         text = f"🛑 {name}, ОСТАННЄ попередження!\nЩе раз — і пауза на {BAN_SEC // 60} хв. 🔇"
-    else:  # strike >= 4 → реальний mute
-        if await _mute(bot, chat_id, user_id, BAN_SEC):
+    else:  # strike >= 4 → реальний mute (тільки якщо є справжній user_id)
+        if user_id is not None and await _mute(bot, chat_id, user_id, BAN_SEC):
             text = (f"🚫 {name} — ПАУЗА {BAN_SEC // 60} хв.\n"
                     f"За спам одним посиланням. Повтори видаляються.\n"
                     f"Поверніться трохи згодом. ⏱")
@@ -579,6 +582,10 @@ async def handle(msg: Message, bot: Bot):
 
     chat_id = msg.chat.id
     user_id = msg.from_user.id if msg.from_user else None
+    # Анонімні sender'и (напр. лінкований канал у групі-обговоренні) мають
+    # from_user=None — без fallback на sender_chat.id вони йшли б у роботу
+    # БЕЗ dup/rate-limit узагалі (DoS: необмежений спам на черзі/Chromium).
+    sender_key = user_id if user_id is not None else (msg.sender_chat.id if msg.sender_chat else None)
 
     # Whitelist довірених доменів: тиха реакція, нуль повідомлень у стрічці.
     # ДО dup/rate-limit: довірені посилання не палять ліміти й не ведуть до mute.
@@ -588,33 +595,33 @@ async def handle(msg: Message, bot: Bot):
         await _react(bot, msg, TRUSTED_REACTION)
         return
 
-    if user_id is not None:
-        # Повтор тієї ж посилання цим юзером → ескалація (видалення + попередження/мьют).
-        if (chat_id, user_id, url) in _dup_seen:
-            _dup_seen[(chat_id, user_id, url)] = True  # тримаємо вікно живим, поки спамлять
-            await _handle_duplicate_spam(bot, msg, chat_id, user_id)
+    if sender_key is not None:
+        # Повтор тієї ж посилання цим sender'ом → ескалація (видалення + попередження/мьют).
+        if (chat_id, sender_key, url) in _dup_seen:
+            _dup_seen[(chat_id, sender_key, url)] = True  # тримаємо вікно живим, поки спамлять
+            await _handle_duplicate_spam(bot, msg, chat_id, sender_key, user_id)
             return
 
         # Загальний пейсинг РІЗНИХ посилань. Дублі сюди не доходять.
-        cooldown = _rate_cooldown(user_id)
+        cooldown = _rate_cooldown(sender_key)
         if cooldown:
-            logger.info(f"RATE_LIMIT user={user_id} cooldown={cooldown}s")
-            if user_id not in _rate_notified:
-                _rate_notified[user_id] = True
+            logger.info(f"RATE_LIMIT sender={sender_key} cooldown={cooldown}s")
+            if sender_key not in _rate_notified:
+                _rate_notified[sender_key] = True
                 await msg.reply(f"⏳ Зачекайте {cooldown} сек. перед наступним запитом.")
             return
 
-        _dup_seen[(chat_id, user_id, url)] = True  # приймаємо в роботу
+        _dup_seen[(chat_id, sender_key, url)] = True  # приймаємо в роботу
 
     screenshot.log_ram("Start request")
 
-    if not security.is_safe(url):
+    if not await security.is_safe(url):
         # ВАЖЛИВО: знімаємо позначку dup для заблокованого URL. Інакше повторне
         # (по-людськи) надсилання тієї ж недоступної ссылки впаде у ветку
         # _handle_duplicate_spam → видалення + ескалація → mute за «спам».
         # Заблокований URL ніколи не йшов у роботу — це не дубль.
-        if user_id is not None:
-            _dup_seen.pop((chat_id, user_id, url), None)
+        if sender_key is not None:
+            _dup_seen.pop((chat_id, sender_key, url), None)
         await msg.reply("🚫 Посилання веде на недоступний ресурс.")
         return
 
@@ -634,8 +641,8 @@ async def handle(msg: Message, bot: Bot):
     try:
         future, position, is_duplicate = await queue_manager.enqueue(dest_key, url)
     except queue_manager.QueueFull:
-        if user_id is not None:
-            _dup_seen.pop((chat_id, user_id, url), None)
+        if sender_key is not None:
+            _dup_seen.pop((chat_id, sender_key, url), None)
         await msg.reply(
             "⚠️ Бот зараз перевантажений (черга заповнена).\n"
             "Будь ласка, спробуйте через хвилину."

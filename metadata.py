@@ -43,7 +43,7 @@ async def fetch(url: str) -> dict:
                 current = url
                 for _ in range(_MAX_HOPS):
                     # Перевірка ПЕРЕД запитом: небезпечний хоп → нічого не конектимо.
-                    if not security.is_safe(current):
+                    if not await security.is_safe(current):
                         logger.warning("SSRF blocked metadata hop (host not safe)")
                         return {}
                     async with client.stream("GET", current, headers=headers) as r:

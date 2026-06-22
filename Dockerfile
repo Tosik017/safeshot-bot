@@ -10,7 +10,9 @@ WORKDIR /app
 
 # Браузери вже в образі v1.60.0 — playwright install НЕ запускаємо.
 COPY --chown=pwuser:pwuser requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# --require-hashes: requirements.txt — повний lock (uv pip compile --generate-hashes),
+# build падає, якщо хоч один пакет (включно з транзитивними) прийде з іншим вмістом.
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 COPY --chown=pwuser:pwuser . .
 

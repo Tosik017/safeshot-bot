@@ -10,6 +10,8 @@ __pycache__/
 venv/
 tests/
 *.md
+*LOG*
 project_dump.md
+requirements.in
 docker-compose.yml
 .github/

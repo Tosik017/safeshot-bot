@@ -226,7 +226,7 @@ async def _route_handler(route):
 
     # 1) SSRF на КОЖЕН запит: subresource/iframe/fetch/редирект на внутрішній
     # адрес → abort. data:/blob: не мають host і не йдуть у мережу → пропускаємо.
-    if url.startswith(("http://", "https://")) and not security.is_safe(url):
+    if url.startswith(("http://", "https://")) and not await security.is_safe(url):
         await route.abort()
         return
 
@@ -280,7 +280,7 @@ async def shoot(url: str) -> tuple[list[bytes], dict]:
 
     # Друга перевірка SSRF безпосередньо перед навігацією — звужує вікно
     # DNS-rebinding між перевіркою в bot.py і реальним резолвом Chromium.
-    if not security.is_safe(url):
+    if not await security.is_safe(url):
         logger.warning("SSRF re-check failed before goto")
         return [], {}
 

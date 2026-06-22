@@ -1,17 +1,18 @@
 import asyncio
+import hmac
 import signal
 import sys
 import time
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher
 from loguru import logger
 
 from bot import router
 import screenshot, queue_manager
-from config import BOT_TOKEN, PORT, LOG_LEVEL
+from config import BOT_TOKEN, PORT, LOG_LEVEL, HEALTH_TOKEN
 
 # Централізоване логування. Рівень — з env. Сирі винятки ми вже маскуємо в модулях
 # (logging type(e).__name__), тут вимикаємо diagnose/backtrace, щоб у трейс не
@@ -41,7 +42,12 @@ async def ping():
 
 
 @app.get("/health")
-async def health():
+async def health(request: Request):
+    # HEALTH_TOKEN заданий → ендпоінт лише для власника (curl -H "X-Health-Token: ...").
+    if HEALTH_TOKEN and not hmac.compare_digest(
+        request.headers.get("X-Health-Token", ""), HEALTH_TOKEN
+    ):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
     # Мінімум розкриття: лише статус і булеві прапорці. Внутрішні лічильники
     # черги/кешу НЕ віддаємо назовні (recon для DoS) — вони лишаються в логах.
     # browser: жив І підключений (is_connected ловить мертвий процес Chromium).
