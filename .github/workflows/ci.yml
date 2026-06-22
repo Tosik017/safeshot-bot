@@ -28,5 +28,9 @@ jobs:
       - name: Syntax check
         run: python -m py_compile *.py
 
+      # ВАЖЛИВО: саме "python -m pytest", не голий "pytest" — консольний скрипт
+      # pytest НЕ додає рутову директорію репо в sys.path, тоді як "python -m"
+      # робить це завжди. Без -m: ModuleNotFoundError: No module named 'bot'
+      # ('security' тощо) — tests/ без __init__.py не бачить кореневі модулі.
       - name: Run tests
-        run: pytest -q
+        run: python -m pytest -q
