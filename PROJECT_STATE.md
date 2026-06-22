@@ -1,7 +1,9 @@
 # SafeShot Bot — состояние проекта (handoff / аудит)
-_Снимок на 2026-06-11 (вечер). СТАБИЛЬНАЯ ТОЧКА v2 (тег `stable-2026-06-11-v2`). Точка входа для нового чата._
+_Снимок на 2026-06-22. Секции 1-9 ниже — снимок на 2026-06-11, актуальны (RAM-калибровка не менялась). Раздел 10 — обновление после security/infra-аудита 2026-06-22._
 
-Переносить в новый чат: **HOW_TO_HELP_ME.md + этот PROJECT_STATE.md + project_dump.md (СВЕЖИЙ!)**.
+⚠️ Тег `stable-2026-06-11-v2` и файл `HOW_TO_HELP_ME.md`, упомянутые ниже как «точка входа для нового чата», **не существуют** в текущем репозитории (ни локально, ни на GitHub) — формулировка ниже устарела, актуальный handoff-набор: этот файл + `SECURITY_AUDIT_2026.md` + `README.md`.
+
+Переносить в новый чат: этот PROJECT_STATE.md + `SECURITY_AUDIT_2026.md` + `project_dump.md` (СВЕЖИЙ!, untracked — генерируется по команде ниже).
 
 ---
 
@@ -83,9 +85,27 @@ Telegram-бот безопасного предпросмотра ссылок. 
 1. Запушить текущее (после py_compile!).
 2. Свежий дамп из папки репо:
    `{ echo '# Дамп'; for f in $(find . -name "*.py" -o -name "Dockerfile" -o -name "*.yml" -o -name "*.txt" | grep -v .git | sort); do echo "## $f"; echo '```'; cat "$f"; echo '```'; done; } > project_dump.md`
-3. В новый чат: HOW_TO_HELP_ME.md + PROJECT_STATE.md + project_dump.md.
+3. В новый чат: PROJECT_STATE.md + SECURITY_AUDIT_2026.md + project_dump.md.
 
 ## 9. Памятка
-- Health: `https://safeshot-bot.onrender.com/health`
+- Health: `https://safeshot-bot.onrender.com/health` (с 2026-06-22 — опционально за `HEALTH_TOKEN`, см. §10)
 - Форс-рестарт: `git commit --allow-empty -m "restart" && git push`
 - Откат: Render Dashboard → Rollback на «stable» / локально перезаписать файлы рабочими версиями (БЕЗ git revert) и запушить.
+
+## 10. ЛЕДЖЕР: сессия 2026-06-22 (security/infra-аудит)
+
+Полный реестр находок — `SECURITY_AUDIT_2026.md` (V-01..V-20). Здесь — что изменилось в файлах из §2.
+
+| Файл | Что изменилось |
+|---|---|
+| `security.py` | `is_safe()` → `async def`, DNS-резолв через `loop.getaddrinfo` вместо блокирующего `socket.getaddrinfo` (V-03) |
+| `bot.py` | `sender_key` (fallback на `sender_chat.id`) — анонимные sender'ы больше не обходят dedup/rate-limit (V-04); `_handle_duplicate_spam` принимает `sender_key` отдельно от `user_id` |
+| `main.py`, `config.py` | Опциональный `HEALTH_TOKEN` — `/health` закрывается заголовком `X-Health-Token`, по умолчанию открыт как раньше (V-09) |
+| `docker-compose.yml` | Убран `ipc: host` — не нужен, Chromium на `--disable-dev-shm-usage` (V-05). Локальной разработки это не сломало |
+| `requirements.in` (новый) + `requirements.txt` | Теперь hash-pinned lock (`uv pip compile --generate-hashes`, Python 3.12/x86_64) — `pip install --require-hashes` в Dockerfile (V-06). `pip-audit` на момент аудита: 0 known CVE на весь граф из 35 пакетов |
+| `.gitignore`, `.dockerignore` | `*LOG*` — закрывает дыру, из-за которой утёк лог-файл с внутренними ID Render (V-01, устранено через `git-filter-repo` + force-push) |
+| `LICENSE` (новый) | MIT |
+| `.github/workflows/ci.yml` (новый) | `py_compile` + `pytest` на каждый push/PR — первая автоматизация в проекте, раньше только ручной чек-лист в §7 ниже |
+| `README.md` | Полностью переписан под текущее состояние (см. сам файл) |
+
+**Важно для будущих сессий:** RAM-калибровка (§3 выше) НЕ менялась и не пересматривалась — все правки сегодня логические/инфраструктурные, ни одна не трогает `RESTART_AT_MB`/`ABORT_AT_MB`/`DEVICE_SCALE`/`SEMAPHORE`. Перед любым изменением build/runtime-пути сначала проверять реальные ограничения Render Free (512 МБ, Python 3.12, amd64 — подтверждено через registry-манифест образа в этой сессии), а не гипотетическую более мощную версию — таковой пока не существует ни в одном деплое.

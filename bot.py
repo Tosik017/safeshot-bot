@@ -542,6 +542,14 @@ def _thread_disabled(chat_id: int, thread_id) -> bool:
         return chat_id in DISABLED_GENERAL_CHATS
     return (chat_id, thread_id) in DISABLED_THREADS
 
+def _sender_key(msg: Message) -> int | None:
+    """Ключ для dedup/rate-limit. Анонімні sender'и (напр. лінкований канал
+    у групі-обговоренні) мають from_user=None — без fallback на sender_chat.id
+    вони йшли б у роботу БЕЗ dup/rate-limit узагалі (DoS: необмежений спам
+    на черзі/Chromium)."""
+    user_id = msg.from_user.id if msg.from_user else None
+    return user_id if user_id is not None else (msg.sender_chat.id if msg.sender_chat else None)
+
 @router.message()
 async def handle(msg: Message, bot: Bot):
     age = (datetime.now(timezone.utc) - msg.date).total_seconds()
@@ -582,10 +590,7 @@ async def handle(msg: Message, bot: Bot):
 
     chat_id = msg.chat.id
     user_id = msg.from_user.id if msg.from_user else None
-    # Анонімні sender'и (напр. лінкований канал у групі-обговоренні) мають
-    # from_user=None — без fallback на sender_chat.id вони йшли б у роботу
-    # БЕЗ dup/rate-limit узагалі (DoS: необмежений спам на черзі/Chromium).
-    sender_key = user_id if user_id is not None else (msg.sender_chat.id if msg.sender_chat else None)
+    sender_key = _sender_key(msg)
 
     # Whitelist довірених доменів: тиха реакція, нуль повідомлень у стрічці.
     # ДО dup/rate-limit: довірені посилання не палять ліміти й не ведуть до mute.

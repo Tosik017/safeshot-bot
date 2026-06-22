@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # requirements.txt — hash-pinned lock под Python 3.12 / x86_64, тот же
+      # таргет, что и Dockerfile. Падает, если lock рассинхронизирован с in.
+      - name: Install dependencies (hash-pinned)
+        run: pip install -r requirements.txt
+
+      - name: Install test dependencies
+        run: pip install pytest
+
+      # py_compile — синтаксис-чек всех модулей без выполнения кода
+      # (config.py делает fail-fast на отсутствующий BOT_TOKEN при ИМПОРТЕ,
+      # а не при компиляции — поэтому секреты тут не нужны).
+      - name: Syntax check
+        run: python -m py_compile *.py
+
+      - name: Run tests
+        run: pytest -q
